@@ -1,0 +1,21 @@
+# Google API
+.env
+token.json
+credentials.json
+
+# App State
+settings.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# OS
+.DS_Store
+Thumbs.db
