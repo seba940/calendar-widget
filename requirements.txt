@@ -4,4 +4,3 @@ google-auth-oauthlib
 python-dotenv
 korean-lunar-calendar
 httplib2
-webbrowser
