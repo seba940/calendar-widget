@@ -13,7 +13,7 @@ import traceback
 from google_calendar_api import GoogleCalendarAPI
 from calendar_utils import CalendarUtils
 from config_manager import ConfigManager
-from ui_components import UIComponents, DetailWindow
+from ui_components import UIComponents, DetailWindow, EventPopup, SettingsWindow
 
 # --- 윈도우 시스템 내부의 가짜 프록시 및 SSL 설정 ---
 urllib.request.getproxies = lambda: {}
@@ -38,6 +38,7 @@ class GridCalendarApp:
         
         calendar.setfirstweekday(calendar.SUNDAY)
         self.detail_win_instance = None
+        self.settings_win_instance = None
         self._drag_data = None
         self._event_widgets = []
         
@@ -198,22 +199,54 @@ class GridCalendarApp:
             self.manual_refresh()
         except Exception as e: messagebox.showerror("오류", str(e))
 
-    def delete_event_with_win(self, event_id, win):
-        if messagebox.askyesno("삭제 확인", "삭제하시겠습니까?"):
-            try:
-                self.api.delete_event(event_id)
-                win.destroy()
-                self.manual_refresh()
-            except Exception as e: messagebox.showerror("오류", str(e))
+    def delete_event_with_win(self, event_id, win, event_data=None):
+        recurring_id = event_data.get('recurringEventId') if event_data else None
+        
+        if recurring_id:
+            # 반복 일정인 경우 선택 팝업
+            ask_win = tk.Toplevel(self.root)
+            ask_win.title("반복 일정 삭제")
+            ask_win.geometry("300x180")
+            ask_win.attributes("-topmost", True)
+            ask_win.configure(bg=self.bg_color, padx=20, pady=20)
+            
+            tk.Label(ask_win, text="이 일정은 반복되는 일정입니다.", fg=self.fg_color, bg=self.bg_color).pack(pady=10)
+            
+            def delete_one():
+                try:
+                    self.api.delete_event(event_id)
+                    ask_win.destroy()
+                    win.destroy()
+                    self.manual_refresh()
+                except Exception as e: messagebox.showerror("오류", str(e))
+
+            def delete_all():
+                try:
+                    self.api.delete_event(recurring_id)
+                    ask_win.destroy()
+                    win.destroy()
+                    self.manual_refresh()
+                except Exception as e: messagebox.showerror("오류", str(e))
+
+            tk.Button(ask_win, text="이 일정만 삭제", command=delete_one, bg="#555", fg="white").pack(fill="x", pady=2)
+            tk.Button(ask_win, text="모든 반복 일정 삭제", command=delete_all, bg="#ff4757", fg="white").pack(fill="x", pady=2)
+            tk.Button(ask_win, text="취소", command=ask_win.destroy, bg="#333", fg="white").pack(fill="x", pady=2)
+            
+        else:
+            if messagebox.askyesno("삭제 확인", "삭제하시겠습니까?"):
+                try:
+                    self.api.delete_event(event_id)
+                    win.destroy()
+                    self.manual_refresh()
+                except Exception as e: messagebox.showerror("오류", str(e))
 
     def add_event_popup_with_win(self, date_str, win):
-        # 팝업 UI는 ui_components로 분리 가능 (현재는 기존 로직 유지 가능)
         win.destroy()
-        # ... (이하 생략 - 상세 UI는 필요시 추가 모듈화)
+        EventPopup(self.root, self, date_str)
 
     def edit_event_popup_with_win(self, event, date_str, win):
         win.destroy()
-        # ...
+        EventPopup(self.root, self, date_str, event)
 
     def fetch_events_thread(self, year, month):
         self.events_data, self.holiday_data = self.api.fetch_events(year, month)
@@ -244,7 +277,10 @@ class GridCalendarApp:
         if e.widget == self.root: self.draw_calendar(self.current_year, self.current_month)
     def prev_month(self): self.current_month=12 if self.current_month==1 else self.current_month-1; self.current_year-=(1 if self.current_month==12 else 0); self.update_calendar()
     def next_month(self): self.current_month=1 if self.current_month==12 else self.current_month+1; self.current_year+=(1 if self.current_month==1 else 0); self.update_calendar()
-    def open_settings(self): pass # 설정 UI 모듈화 예정
+    def open_settings(self): 
+        if self.settings_win_instance and self.settings_win_instance.win.winfo_exists():
+            self.settings_win_instance.win.destroy()
+        self.settings_win_instance = SettingsWindow(self.root, self)
 
 if __name__ == '__main__':
     root = tk.Tk()

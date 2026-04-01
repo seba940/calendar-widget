@@ -114,10 +114,221 @@ class DetailWindow:
             color = "#888888" if is_done else self.app.fg_color
 
             tk.Button(e_frame, text="V", command=lambda evt=e: self.app.toggle_complete(evt), bg="#444", fg="white", bd=0, width=2, cursor="hand2").pack(side="left", padx=2)
-            tk.Label(e_frame, text=f"• {summary_text} ({t})", fg=color, bg=self.app.bg_color, anchor="w", font=evt_font).pack(side="left", fill="x", expand=True)
+            
+            # 요약과 메모를 함께 표시
+            info_frame = tk.Frame(e_frame, bg=self.app.bg_color)
+            info_frame.pack(side="left", fill="x", expand=True)
+            
+            tk.Label(info_frame, text=f"• {summary_text} ({t})", fg=color, bg=self.app.bg_color, anchor="w", font=evt_font).pack(side="top", fill="x")
+            
+            memo = e.get('description', '')
+            if memo:
+                tk.Label(info_frame, text=f"  ㄴ {memo}", fg=self.app.lunar_color, bg=self.app.bg_color, anchor="w", font=(self.app.font_family, 8)).pack(side="top", fill="x")
 
-            tk.Button(e_frame, text="삭제", command=lambda evt_id=e['id']: self.app.delete_event_with_win(evt_id, self.win), bg="#ff4757", fg="white", bd=0, font=(self.app.font_family, 9), cursor="hand2").pack(side="right", padx=(2, 0))
+            tk.Button(e_frame, text="삭제", command=lambda evt_id=e['id'], evt=e: self.app.delete_event_with_win(evt_id, self.win, evt), bg="#ff4757", fg="white", bd=0, font=(self.app.font_family, 9), cursor="hand2").pack(side="right", padx=(2, 0))
             tk.Button(e_frame, text="수정", command=lambda evt=e: self.app.edit_event_popup_with_win(evt, self.date_str, self.win), bg="#555555", fg="white", bd=0, font=(self.app.font_family, 9), cursor="hand2").pack(side="right")
         
         tk.Button(self.win, text="+ 새로운 일정 추가하기", command=lambda: self.app.add_event_popup_with_win(self.date_str, self.win), bg="#1a73e8", fg="white", font=(self.app.font_family, 10, "bold")).pack(fill="x", pady=10)
         tk.Button(self.win, text="닫기", command=self.win.destroy).pack(fill="x")
+
+class EventPopup:
+    def __init__(self, parent, app, date_str, event=None):
+        self.app = app
+        self.date_str = date_str
+        self.event = event
+        self.win = tk.Toplevel(parent)
+        self.win.title("일정 추가" if not event else "일정 수정")
+        self.win.geometry("450x650") # 높이 증가
+        self.win.attributes("-topmost", True)
+        self.win.configure(bg=app.bg_color, padx=30, pady=20)
+        
+        tk.Label(self.win, text=f"🗓 {date_str} 일정", font=(app.font_family, 14, "bold"), bg=app.bg_color, fg=app.fg_color).pack(pady=(0, 15))
+
+        # 제목
+        tk.Label(self.win, text="📝 제목", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        self.summary_ent = tk.Entry(self.win, font=(app.font_family, 10))
+        self.summary_ent.pack(fill="x", pady=(5, 10))
+        if event: self.summary_ent.insert(0, event.get('summary', ''))
+        
+        # 시간
+        tk.Label(self.win, text="⏰ 시간 (HH:MM 또는 '종일')", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        self.time_ent = tk.Entry(self.win, font=(app.font_family, 10))
+        self.time_ent.pack(fill="x", pady=(5, 10))
+        
+        if event:
+            t = event['start'].get('dateTime', '종일')
+            if 'T' in t: t = t[11:16]
+            self.time_ent.insert(0, t)
+        else:
+            self.time_ent.insert(0, "종일")
+
+        # 메모 (Description)
+        tk.Label(self.win, text="🗒 메모", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        self.memo_ent = tk.Text(self.win, font=(app.font_family, 10), height=4)
+        self.memo_ent.pack(fill="x", pady=(5, 10))
+        if event and event.get('description'):
+            self.memo_ent.insert("1.0", event.get('description'))
+
+        # 반복 설정
+        tk.Label(self.win, text="🔄 반복 설정", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        self.repeat_var = tk.StringVar(value="없음")
+        repeat_frame = tk.Frame(self.win, bg=app.bg_color)
+        repeat_frame.pack(fill="x", pady=(5, 10))
+        
+        repeats = [("없음", "NONE"), ("매일", "DAILY"), ("매월", "MONTHLY"), ("매년", "YEARLY")]
+        for text, val in repeats:
+            tk.Radiobutton(repeat_frame, text=text, variable=self.repeat_var, value=val, bg=app.bg_color, fg=app.fg_color, selectcolor="#444").pack(side="left", padx=5)
+
+        if event and event.get('recurrence'):
+            rrule = event['recurrence'][0]
+            if "DAILY" in rrule: self.repeat_var.set("DAILY")
+            elif "MONTHLY" in rrule: self.repeat_var.set("MONTHLY")
+            elif "YEARLY" in rrule: self.repeat_var.set("YEARLY")
+
+        # 반복 종료일
+        tk.Label(self.win, text="📅 반복 종료일 (YYYY-MM-DD)", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        self.end_date_ent = tk.Entry(self.win, font=(app.font_family, 10))
+        self.end_date_ent.pack(fill="x", pady=(5, 15))
+        
+        if event and event.get('recurrence'):
+            rrule = event['recurrence'][0]
+            if "UNTIL=" in rrule:
+                until = rrule.split("UNTIL=")[1].split(";")[0]
+                formatted_until = f"{until[:4]}-{until[4:6]}-{until[6:8]}"
+                self.end_date_ent.insert(0, formatted_until)
+
+        btn_frame = tk.Frame(self.win, bg=app.bg_color)
+        btn_frame.pack(fill="x", pady=(10, 0))
+
+        tk.Button(btn_frame, text="💾 저장하기", command=self.save_event, bg="#1a73e8", fg="white", font=(app.font_family, 10, "bold"), pady=8).pack(side="left", expand=True, fill="x", padx=(0, 5))
+        tk.Button(btn_frame, text="❌ 취소", command=self.win.destroy, bg="#555555", fg="white", font=(app.font_family, 10), pady=8).pack(side="left", expand=True, fill="x", padx=(5, 0))
+
+    def save_event(self):
+        summary = self.summary_ent.get().strip()
+        time_str = self.time_ent.get().strip()
+        memo = self.memo_ent.get("1.0", "end-1c").strip()
+        repeat = self.repeat_var.get()
+        end_date = self.end_date_ent.get().strip()
+        
+        if not summary:
+            messagebox.showwarning("입력 누락", "일정 제목을 입력해 주세요.")
+            return
+
+        body = {'summary': summary, 'description': memo, 'start': {}, 'end': {}}
+        
+        # 시간 처리
+        if time_str == "종일" or not time_str:
+            start_dt = datetime.datetime.strptime(self.date_str, "%Y-%m-%d")
+            end_dt = start_dt + datetime.timedelta(days=1)
+            body['start'] = {'date': self.date_str}
+            body['end'] = {'date': end_dt.strftime("%Y-%m-%d")}
+        else:
+            try:
+                time_obj = datetime.datetime.strptime(time_str, "%H:%M")
+                start_dt_str = f"{self.date_str}T{time_str}:00"
+                end_time_obj = time_obj + datetime.timedelta(hours=1)
+                end_time_str = end_time_obj.strftime("%H:%M")
+                
+                end_dt_str = f"{self.date_str}T{end_time_str}:00"
+                if end_time_obj.day > time_obj.day:
+                    curr_dt = datetime.datetime.strptime(self.date_str, "%Y-%m-%d")
+                    next_dt = curr_dt + datetime.timedelta(days=1)
+                    end_dt_str = f"{next_dt.strftime('%Y-%m-%d')}T{end_time_str}:00"
+
+                body['start'] = {'dateTime': start_dt_str, 'timeZone': 'Asia/Seoul'}
+                body['end'] = {'dateTime': end_dt_str, 'timeZone': 'Asia/Seoul'}
+            except ValueError:
+                messagebox.showerror("형식 오류", "시간은 HH:MM 형식으로 입력해 주세요.")
+                return
+
+        # 반복 처리
+        if repeat != "NONE":
+            rrule = f"RRULE:FREQ={repeat}"
+            if end_date:
+                try:
+                    # YYYY-MM-DD -> YYYYMMDD
+                    until = end_date.replace("-", "") + "T235959Z"
+                    rrule += f";UNTIL={until}"
+                except:
+                    messagebox.showerror("형식 오류", "종료일은 YYYY-MM-DD 형식으로 입력해 주세요.")
+                    return
+            body['recurrence'] = [rrule]
+
+        try:
+            if self.event:
+                self.app.api.update_event(self.event['id'], body)
+            else:
+                self.app.api.insert_event(body)
+            
+            self.win.destroy()
+            self.app.manual_refresh()
+        except Exception as e:
+            messagebox.showerror("오류", f"일정 저장 중 오류 발생: {e}")
+
+class SettingsWindow:
+    def __init__(self, parent, app):
+        self.app = app
+        self.win = tk.Toplevel(parent)
+        self.win.title("설정")
+        self.win.geometry("400x500")
+        self.win.attributes("-topmost", True)
+        self.win.configure(bg=app.bg_color, padx=30, pady=30)
+        
+        tk.Label(self.win, text="⚙️ 프로그램 설정", font=(app.font_family, 14, "bold"), bg=app.bg_color, fg=app.fg_color).pack(pady=(0, 20))
+
+        # 테마 설정
+        tk.Label(self.win, text="🎨 테마", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        self.theme_var = tk.StringVar(value=app.theme)
+        theme_frame = tk.Frame(self.win, bg=app.bg_color)
+        theme_frame.pack(fill="x", pady=(5, 15))
+        tk.Radiobutton(theme_frame, text="Black", variable=self.theme_var, value="black", bg=app.bg_color, fg=app.fg_color, selectcolor="#444").pack(side="left")
+        tk.Radiobutton(theme_frame, text="White", variable=self.theme_var, value="white", bg=app.bg_color, fg=app.fg_color, selectcolor="#ddd").pack(side="left", padx=10)
+
+        # 투명도 설정
+        tk.Label(self.win, text="🌓 투명도", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        self.alpha_scale = tk.Scale(self.win, from_=0.1, to=1.0, resolution=0.05, orient="horizontal", bg=app.bg_color, fg=app.fg_color, highlightthickness=0)
+        self.alpha_scale.set(app.alpha_val)
+        self.alpha_scale.pack(fill="x", pady=(5, 15))
+
+        # 폰트 설정
+        tk.Label(self.win, text="🔡 폰트 (예: Malgun Gothic)", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        self.font_ent = tk.Entry(self.win, font=(app.font_family, 10))
+        self.font_ent.pack(fill="x", pady=(5, 15))
+        self.font_ent.insert(0, app.font_family)
+
+        # 폰트 크기 설정
+        tk.Label(self.win, text="📏 폰트 크기", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        self.size_ent = tk.Entry(self.win, font=(app.font_family, 10))
+        self.size_ent.pack(fill="x", pady=(5, 20))
+        self.size_ent.insert(0, str(app.font_size))
+
+        btn_frame = tk.Frame(self.win, bg=app.bg_color)
+        btn_frame.pack(fill="x", pady=(10, 0))
+
+        tk.Button(btn_frame, text="✅ 적용 및 저장", command=self.save_settings, bg="#1a73e8", fg="white", font=(app.font_family, 10, "bold"), pady=8).pack(side="left", expand=True, fill="x", padx=(0, 5))
+        tk.Button(btn_frame, text="❌ 취소", command=self.win.destroy, bg="#555555", fg="white", font=(app.font_family, 10), pady=8).pack(side="left", expand=True, fill="x", padx=(5, 0))
+
+    def save_settings(self):
+        try:
+            new_theme = self.theme_var.get()
+            new_alpha = float(self.alpha_scale.get())
+            new_font = self.font_ent.get().strip()
+            new_size = int(self.size_ent.get().strip())
+
+            self.app.theme = new_theme
+            self.app.alpha_val = new_alpha
+            self.app.font_family = new_font
+            self.app.font_size = new_size
+
+            self.app.set_theme_colors(new_theme)
+            self.app.root.attributes("-alpha", new_alpha)
+            self.app.root.configure(bg=self.app.bg_color)
+            
+            self.app.save_settings()
+            self.app.setup_ui()
+            self.app.manual_refresh()
+            
+            messagebox.showinfo("알림", "설정이 저장되었습니다.")
+            self.win.destroy()
+        except Exception as e:
+            messagebox.showerror("오류", f"설정 저장 중 오류 발생: {e}")
