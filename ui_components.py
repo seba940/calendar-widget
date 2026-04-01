@@ -15,15 +15,20 @@ class UIComponents:
         tk.Label(guide_win, text="🚀 구글 캘린더 연결 설정", font=(font_family, 16, "bold"), fg=fg_color, bg=bg_color).pack(pady=(0, 20))
         
         guide_text = (
-            "구글 캘린더와 연동하려면 프로그램의 '신분증'이 필요합니다.\n"
-            "아래 방법 중 하나를 선택해 주세요:\n\n"
-            "방법 A: 'credentials.json' 파일을 이 프로그램 폴더에 넣기 (추천)\n"
-            "방법 B: 아래에 Client ID와 Secret을 직접 입력하기\n\n"
-            "설정 방법:\n"
-            "1. Google Cloud Console에서 'OAuth 클라이언트 ID'를 생성합니다.\n"
-            "2. 애플리케이션 유형을 '데스크톱 앱'으로 선택하세요.\n"
-            "3. 생성 후 JSON 파일을 다운로드하여 이름을 'credentials.json'으로\n"
-            "   바꾸어 폴더에 넣거나, 정보를 복사해 아래에 입력하세요."
+            "구글 캘린더 연동을 위해 'Google Cloud Console' 설정이 필요합니다.\n\n"
+            "1단계: 프로젝트 생성 및 API 활성화\n"
+            " - Google Cloud Console 접속 후 새 프로젝트를 만듭니다.\n"
+            " - [API 및 서비스 > 라이브러리]에서 'Google Calendar API'를 검색해 [활성화]를 누릅니다.\n\n"
+            "2단계: OAuth 동의 화면 설정 (중요!)\n"
+            " - [OAuth 동의 화면] 메뉴에서 User Type을 [외부]로 선택 후 생성합니다.\n"
+            " - [테스트 사용자] 섹션에 본인의 구글 이메일을 반드시 추가해야 로그인이 가능합니다.\n\n"
+            "3단계: 사용자 인증 정보 생성\n"
+            " - [사용자 인증 정보 > 인증 정보 만들기]에서 [OAuth 클라이언트 ID]를 선택합니다.\n"
+            " - 애플리케이션 유형을 [데스크톱 앱]으로 선택하고 생성합니다.\n\n"
+            "4단계: 파일 적용\n"
+            " - 생성된 클라이언트 ID의 [JSON 다운로드] 버튼을 누릅니다.\n"
+            " - 다운로드된 파일 이름을 'credentials.json'으로 바꾸어 프로그램 폴더에 넣으세요.\n"
+            " - (파일 대신 아래에 ID와 Secret을 직접 입력해도 됩니다.)"
         )
         tk.Label(guide_win, text=guide_text, justify="left", font=(font_family, 10), fg=fg_color, bg=bg_color).pack(fill="x", pady=(0, 20))
 
