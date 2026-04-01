@@ -163,29 +163,49 @@ class EventPopup:
         self.all_day_var = tk.BooleanVar()
         tk.Checkbutton(time_frame, text="종일", variable=self.all_day_var, command=self.toggle_time_fields, bg=app.bg_color, fg=app.fg_color, selectcolor="#444", activebackground=app.bg_color).pack(side="left")
 
-        self.hour_cb = ttk.Combobox(time_frame, values=[f"{h:02d}" for h in range(24)], width=5, state="readonly")
-        self.hour_cb.pack(side="left", padx=(10, 2))
-        tk.Label(time_frame, text="시", bg=app.bg_color, fg=app.fg_color).pack(side="left")
+        self.hour_cb = ttk.Combobox(time_frame, values=[f"{h:02d}" for h in range(24)], width=4, state="readonly")
+        self.hour_cb.pack(side="left", padx=(5, 2))
+        tk.Label(time_frame, text=":", bg=app.bg_color, fg=app.fg_color).pack(side="left")
         
-        self.min_cb = ttk.Combobox(time_frame, values=[f"{m:02d}" for m in range(0, 60, 10)], width=5, state="readonly")
-        self.min_cb.pack(side="left", padx=(5, 2))
-        tk.Label(time_frame, text="분", bg=app.bg_color, fg=app.fg_color).pack(side="left")
+        self.min_cb = ttk.Combobox(time_frame, values=[f"{m:02d}" for m in range(0, 60, 5)], width=4, state="readonly")
+        self.min_cb.pack(side="left", padx=(2, 5))
+        
+        tk.Label(time_frame, text="~", bg=app.bg_color, fg=app.fg_color, font=("Arial", 12, "bold")).pack(side="left", padx=5)
+
+        self.end_hour_cb = ttk.Combobox(time_frame, values=[f"{h:02d}" for h in range(24)], width=4, state="readonly")
+        self.end_hour_cb.pack(side="left", padx=(5, 2))
+        tk.Label(time_frame, text=":", bg=app.bg_color, fg=app.fg_color).pack(side="left")
+        
+        self.end_min_cb = ttk.Combobox(time_frame, values=[f"{m:02d}" for m in range(0, 60, 5)], width=4, state="readonly")
+        self.end_min_cb.pack(side="left", padx=(2, 5))
 
         # 초기값 설정
         if event:
-            t = event['start'].get('dateTime', '종일')
-            if 'T' in t:
+            start_t = event['start'].get('dateTime', '종일')
+            end_t = event['end'].get('dateTime', '종일')
+            
+            if 'T' in start_t:
                 self.all_day_var.set(False)
-                self.hour_cb.set(t[11:13])
-                self.min_cb.set(t[14:16])
+                self.hour_cb.set(start_t[11:13])
+                self.min_cb.set(start_t[14:16])
+                if 'T' in end_t:
+                    self.end_hour_cb.set(end_t[11:13])
+                    self.end_min_cb.set(end_t[14:16])
+                else:
+                    self.end_hour_cb.set("10")
+                    self.end_min_cb.set("00")
             else:
                 self.all_day_var.set(True)
                 self.hour_cb.set("09")
                 self.min_cb.set("00")
+                self.end_hour_cb.set("10")
+                self.end_min_cb.set("00")
         else:
             self.all_day_var.set(True)
             self.hour_cb.set("09")
             self.min_cb.set("00")
+            self.end_hour_cb.set("10")
+            self.end_min_cb.set("00")
         
         self.toggle_time_fields()
 
@@ -257,6 +277,8 @@ class EventPopup:
         state = "disabled" if self.all_day_var.get() else "readonly"
         self.hour_cb.config(state=state)
         self.min_cb.config(state=state)
+        self.end_hour_cb.config(state=state)
+        self.end_min_cb.config(state=state)
 
     def toggle_repeat_fields(self):
         state = "normal" if self.repeat_var.get() != "NONE" else "disabled"
@@ -286,18 +308,18 @@ class EventPopup:
             body['start'] = {'date': self.date_str}
             body['end'] = {'date': end_dt.strftime("%Y-%m-%d")}
         else:
-            time_str = f"{self.hour_cb.get()}:{self.min_cb.get()}"
+            start_time_str = f"{self.hour_cb.get()}:{self.min_cb.get()}"
+            end_time_str = f"{self.end_hour_cb.get()}:{self.end_min_cb.get()}"
             try:
-                time_obj = datetime.datetime.strptime(time_str, "%H:%M")
-                start_dt_str = f"{self.date_str}T{time_str}:00"
-                end_time_obj = time_obj + datetime.timedelta(hours=1)
-                end_time_str = end_time_obj.strftime("%H:%M")
+                start_dt_str = f"{self.date_str}T{start_time_str}:00"
                 
-                end_dt_str = f"{self.date_str}T{end_time_str}:00"
-                if end_time_obj.day > time_obj.day:
+                # 종료 시간이 시작 시간보다 빠른 경우 다음날로 처리
+                if end_time_str <= start_time_str:
                     curr_dt = datetime.datetime.strptime(self.date_str, "%Y-%m-%d")
                     next_dt = curr_dt + datetime.timedelta(days=1)
                     end_dt_str = f"{next_dt.strftime('%Y-%m-%d')}T{end_time_str}:00"
+                else:
+                    end_dt_str = f"{self.date_str}T{end_time_str}:00"
 
                 body['start'] = {'dateTime': start_dt_str, 'timeZone': 'Asia/Seoul'}
                 body['end'] = {'dateTime': end_dt_str, 'timeZone': 'Asia/Seoul'}
