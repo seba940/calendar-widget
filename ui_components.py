@@ -151,16 +151,38 @@ class EventPopup:
         if event: self.summary_ent.insert(0, event.get('summary', ''))
         
         # 시간
-        tk.Label(self.win, text="⏰ 시간 (HH:MM 또는 '종일')", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
-        self.time_ent = tk.Entry(self.win, font=(app.font_family, 10))
-        self.time_ent.pack(fill="x", pady=(5, 10))
+        tk.Label(self.win, text="⏰ 시간 설정", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        time_frame = tk.Frame(self.win, bg=app.bg_color)
+        time_frame.pack(fill="x", pady=(5, 10))
+
+        self.all_day_var = tk.BooleanVar()
+        tk.Checkbutton(time_frame, text="종일", variable=self.all_day_var, command=self.toggle_time_fields, bg=app.bg_color, fg=app.fg_color, selectcolor="#444", activebackground=app.bg_color).pack(side="left")
+
+        self.hour_cb = ttk.Combobox(time_frame, values=[f"{h:02d}" for h in range(24)], width=5, state="readonly")
+        self.hour_cb.pack(side="left", padx=(10, 2))
+        tk.Label(time_frame, text="시", bg=app.bg_color, fg=app.fg_color).pack(side="left")
         
+        self.min_cb = ttk.Combobox(time_frame, values=[f"{m:02d}" for m in range(0, 60, 10)], width=5, state="readonly")
+        self.min_cb.pack(side="left", padx=(5, 2))
+        tk.Label(time_frame, text="분", bg=app.bg_color, fg=app.fg_color).pack(side="left")
+
+        # 초기값 설정
         if event:
             t = event['start'].get('dateTime', '종일')
-            if 'T' in t: t = t[11:16]
-            self.time_ent.insert(0, t)
+            if 'T' in t:
+                self.all_day_var.set(False)
+                self.hour_cb.set(t[11:13])
+                self.min_cb.set(t[14:16])
+            else:
+                self.all_day_var.set(True)
+                self.hour_cb.set("09")
+                self.min_cb.set("00")
         else:
-            self.time_ent.insert(0, "종일")
+            self.all_day_var.set(True)
+            self.hour_cb.set("09")
+            self.min_cb.set("00")
+        
+        self.toggle_time_fields()
 
         # 메모 (Description)
         tk.Label(self.win, text="🗒 메모", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
@@ -171,13 +193,13 @@ class EventPopup:
 
         # 반복 설정
         tk.Label(self.win, text="🔄 반복 설정", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
-        self.repeat_var = tk.StringVar(value="없음")
+        self.repeat_var = tk.StringVar(value="NONE")
         repeat_frame = tk.Frame(self.win, bg=app.bg_color)
         repeat_frame.pack(fill="x", pady=(5, 10))
         
         repeats = [("없음", "NONE"), ("매일", "DAILY"), ("매월", "MONTHLY"), ("매년", "YEARLY")]
         for text, val in repeats:
-            tk.Radiobutton(repeat_frame, text=text, variable=self.repeat_var, value=val, bg=app.bg_color, fg=app.fg_color, selectcolor="#444").pack(side="left", padx=5)
+            tk.Radiobutton(repeat_frame, text=text, variable=self.repeat_var, value=val, bg=app.bg_color, fg=app.fg_color, selectcolor="#444", command=self.toggle_repeat_fields).pack(side="left", padx=5)
 
         if event and event.get('recurrence'):
             rrule = event['recurrence'][0]
@@ -186,16 +208,39 @@ class EventPopup:
             elif "YEARLY" in rrule: self.repeat_var.set("YEARLY")
 
         # 반복 종료일
-        tk.Label(self.win, text="📅 반복 종료일 (YYYY-MM-DD)", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
-        self.end_date_ent = tk.Entry(self.win, font=(app.font_family, 10))
-        self.end_date_ent.pack(fill="x", pady=(5, 15))
+        self.end_date_label = tk.Label(self.win, text="📅 반복 종료일", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color)
+        self.end_date_label.pack(anchor="w")
         
+        self.end_date_frame = tk.Frame(self.win, bg=app.bg_color)
+        self.end_date_frame.pack(fill="x", pady=(5, 15))
+
+        curr_year = datetime.datetime.now().year
+        self.end_year_cb = ttk.Combobox(self.end_date_frame, values=[str(y) for y in range(curr_year, curr_year + 11)], width=6, state="readonly")
+        self.end_year_cb.pack(side="left")
+        tk.Label(self.end_date_frame, text="년", bg=app.bg_color, fg=app.fg_color).pack(side="left", padx=(2, 5))
+
+        self.end_month_cb = ttk.Combobox(self.end_date_frame, values=[f"{m:02d}" for m in range(1, 13)], width=4, state="readonly")
+        self.end_month_cb.pack(side="left")
+        tk.Label(self.end_date_frame, text="월", bg=app.bg_color, fg=app.fg_color).pack(side="left", padx=(2, 5))
+
+        self.end_day_cb = ttk.Combobox(self.end_date_frame, values=[f"{d:02d}" for d in range(1, 32)], width=4, state="readonly")
+        self.end_day_cb.pack(side="left")
+        tk.Label(self.end_date_frame, text="일", bg=app.bg_color, fg=app.fg_color).pack(side="left", padx=(2, 5))
+
+        # 반복 종료일 초기값
+        self.end_year_cb.set(str(curr_year))
+        self.end_month_cb.set(datetime.datetime.now().strftime("%m"))
+        self.end_day_cb.set(datetime.datetime.now().strftime("%d"))
+
         if event and event.get('recurrence'):
             rrule = event['recurrence'][0]
             if "UNTIL=" in rrule:
                 until = rrule.split("UNTIL=")[1].split(";")[0]
-                formatted_until = f"{until[:4]}-{until[4:6]}-{until[6:8]}"
-                self.end_date_ent.insert(0, formatted_until)
+                self.end_year_cb.set(until[:4])
+                self.end_month_cb.set(until[4:6])
+                self.end_day_cb.set(until[6:8])
+
+        self.toggle_repeat_fields()
 
         btn_frame = tk.Frame(self.win, bg=app.bg_color)
         btn_frame.pack(fill="x", pady=(10, 0))
@@ -203,12 +248,25 @@ class EventPopup:
         tk.Button(btn_frame, text="💾 저장하기", command=self.save_event, bg="#1a73e8", fg="white", font=(app.font_family, 10, "bold"), pady=8).pack(side="left", expand=True, fill="x", padx=(0, 5))
         tk.Button(btn_frame, text="❌ 취소", command=self.win.destroy, bg="#555555", fg="white", font=(app.font_family, 10), pady=8).pack(side="left", expand=True, fill="x", padx=(5, 0))
 
+    def toggle_time_fields(self):
+        state = "disabled" if self.all_day_var.get() else "readonly"
+        self.hour_cb.config(state=state)
+        self.min_cb.config(state=state)
+
+    def toggle_repeat_fields(self):
+        state = "normal" if self.repeat_var.get() != "NONE" else "disabled"
+        # Combobox는 readonly 상태에서도 값을 바꿀 수 있어야 하므로 state 제어가 까다로움. 
+        # 여기서는 프레임 내부 위젯들의 상태를 변경
+        cb_state = "readonly" if self.repeat_var.get() != "NONE" else "disabled"
+        self.end_year_cb.config(state=cb_state)
+        self.end_month_cb.config(state=cb_state)
+        self.end_day_cb.config(state=cb_state)
+
     def save_event(self):
         summary = self.summary_ent.get().strip()
-        time_str = self.time_ent.get().strip()
+        is_all_day = self.all_day_var.get()
         memo = self.memo_ent.get("1.0", "end-1c").strip()
         repeat = self.repeat_var.get()
-        end_date = self.end_date_ent.get().strip()
         
         if not summary:
             messagebox.showwarning("입력 누락", "일정 제목을 입력해 주세요.")
@@ -217,12 +275,13 @@ class EventPopup:
         body = {'summary': summary, 'description': memo, 'start': {}, 'end': {}}
         
         # 시간 처리
-        if time_str == "종일" or not time_str:
+        if is_all_day:
             start_dt = datetime.datetime.strptime(self.date_str, "%Y-%m-%d")
             end_dt = start_dt + datetime.timedelta(days=1)
             body['start'] = {'date': self.date_str}
             body['end'] = {'date': end_dt.strftime("%Y-%m-%d")}
         else:
+            time_str = f"{self.hour_cb.get()}:{self.min_cb.get()}"
             try:
                 time_obj = datetime.datetime.strptime(time_str, "%H:%M")
                 start_dt_str = f"{self.date_str}T{time_str}:00"
@@ -238,20 +297,15 @@ class EventPopup:
                 body['start'] = {'dateTime': start_dt_str, 'timeZone': 'Asia/Seoul'}
                 body['end'] = {'dateTime': end_dt_str, 'timeZone': 'Asia/Seoul'}
             except ValueError:
-                messagebox.showerror("형식 오류", "시간은 HH:MM 형식으로 입력해 주세요.")
+                messagebox.showerror("오류", "시간 선택이 올바르지 않습니다.")
                 return
 
         # 반복 처리
         if repeat != "NONE":
             rrule = f"RRULE:FREQ={repeat}"
-            if end_date:
-                try:
-                    # YYYY-MM-DD -> YYYYMMDD
-                    until = end_date.replace("-", "") + "T235959Z"
-                    rrule += f";UNTIL={until}"
-                except:
-                    messagebox.showerror("형식 오류", "종료일은 YYYY-MM-DD 형식으로 입력해 주세요.")
-                    return
+            # 종료일 조합
+            end_date_str = f"{self.end_year_cb.get()}{self.end_month_cb.get()}{self.end_day_cb.get()}"
+            rrule += f";UNTIL={end_date_str}T235959Z"
             body['recurrence'] = [rrule]
 
         try:
