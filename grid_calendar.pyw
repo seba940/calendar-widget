@@ -52,6 +52,7 @@ class GridCalendarApp:
         self.is_pinned = self.config.settings.get("is_pinned", False)
         self.tray_icon = None
         self.view_mode = "monthly" # "monthly" or "weekly"
+        self.memos_data = self.config.settings.get("memos", {})
         
         self.set_theme_colors(self.theme)
         self.root.geometry(self.config.settings.get("geometry", "1000x800+100+100"))
@@ -74,6 +75,14 @@ class GridCalendarApp:
         self.check_api_configuration()
         self.setup_ui()
         self.auto_sync()
+
+    def save_memo(self, date_str, text):
+        if not text.strip():
+            if date_str in self.memos_data:
+                del self.memos_data[date_str]
+        else:
+            self.memos_data[date_str] = text
+        self.config.save_settings({"memos": self.memos_data})
 
     def check_api_configuration(self):
         try:
@@ -202,6 +211,31 @@ class GridCalendarApp:
                 display_text = f"[{t}] {summary}" if t else summary
                 tk.Label(evt_row, text=display_text, font=(self.font_family, max(8, self.font_size-1)), 
                          fg="#888888" if is_done else self.fg_color, bg=current_cell_bg, anchor="w").pack(side="left", fill="x")
+
+            # 메모 기능 추가
+            memo_f = tk.Frame(f, bg=current_cell_bg)
+            memo_f.pack(fill="both", expand=True, padx=5, pady=(5, 5))
+            
+            # 구분선 (선택사항)
+            line = tk.Frame(memo_f, height=1, bg=self.line_color)
+            line.pack(fill="x", pady=(0, 5))
+
+            memo_txt = tk.Text(memo_f, font=(self.font_family, max(9, self.font_size-1)), 
+                               bg=current_cell_bg, fg=self.lunar_color, bd=0, 
+                               highlightthickness=0, undo=True, wrap="word")
+            memo_txt.pack(fill="both", expand=True)
+            
+            # 기존 메모 로드
+            initial_memo = self.memos_data.get(target_date, "")
+            if initial_memo:
+                memo_txt.insert("1.0", initial_memo)
+            
+            # 포커스 아웃 시 자동 저장
+            memo_txt.bind("<FocusOut>", lambda e, d=target_date, t=memo_txt: self.save_memo(d, t.get("1.0", "end-1c")))
+            
+            # 클릭 시 메모장에 포커스 (프레임 클릭 방지)
+            memo_txt.bind("<Button-1>", lambda e: "break") 
+            memo_f.bind("<Button-1>", lambda e, t=memo_txt: t.focus_set())
 
     def toggle_view_mode(self):
         self.view_mode = "weekly" if self.view_mode == "monthly" else "monthly"
@@ -442,7 +476,8 @@ class GridCalendarApp:
             "theme": self.theme, 
             "font_family": self.font_family, 
             "font_size": self.font_size, 
-            "is_pinned": self.is_pinned
+            "is_pinned": self.is_pinned,
+            "memos": self.memos_data
         })
     
     def on_press(self, e):
