@@ -1,6 +1,7 @@
 import os
 import os.path
 import httplib2
+import datetime
 from google_auth_httplib2 import AuthorizedHttp
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -96,6 +97,19 @@ class GoogleCalendarAPI:
             except: pass 
 
         return events_data, holiday_data
+
+    def search_events(self, query):
+        if not self.service: return []
+        try:
+            return self.service.events().list(calendarId='primary', q=query, singleEvents=True, orderBy='startTime').execute().get('items', [])
+        except: return []
+
+    def fetch_upcoming_events(self, max_results=50):
+        if not self.service: return []
+        now = datetime.datetime.utcnow().isoformat() + 'Z'
+        try:
+            return self.service.events().list(calendarId='primary', timeMin=now, maxResults=max_results, singleEvents=True, orderBy='startTime').execute().get('items', [])
+        except: return []
 
     def patch_event(self, event_id, body):
         return self.service.events().patch(calendarId='primary', eventId=event_id, body=body).execute()

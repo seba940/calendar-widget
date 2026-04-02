@@ -16,7 +16,7 @@ from pystray import MenuItem as item
 from google_calendar_api import GoogleCalendarAPI
 from calendar_utils import CalendarUtils
 from config_manager import ConfigManager
-from ui_components import UIComponents, DetailWindow, EventPopup, SettingsWindow
+from ui_components import UIComponents, DetailWindow, EventPopup, SettingsWindow, AgendaWindow
 
 # --- 윈도우 시스템 내부의 가짜 프록시 및 SSL 설정 ---
 urllib.request.getproxies = lambda: {}
@@ -51,14 +51,18 @@ class GridCalendarApp:
         self.font_size = self.config.settings.get("font_size", 10)
         self.is_pinned = self.config.settings.get("is_pinned", False)
         self.tray_icon = None
+        self.view_mode = "monthly" # "monthly" or "weekly"
         
         self.set_theme_colors(self.theme)
         self.root.geometry(self.config.settings.get("geometry", "1000x800+100+100"))
         self.root.attributes("-alpha", self.alpha_val)
         self.root.configure(bg=self.bg_color)
 
-        self.current_year = datetime.datetime.now().year
-        self.current_month = datetime.datetime.now().month
+        now = datetime.datetime.now()
+        self.current_year = now.year
+        self.current_month = now.month
+        self.current_date = now.date() # 주간 보기 및 기준 날짜
+
         self._offsetx = 0; self._offsety = 0; self.resizing = False
         self.events_data = []; self.holiday_data = []
 
@@ -83,23 +87,36 @@ class GridCalendarApp:
         if theme == "white":
             self.bg_color = "#ffffff"; self.fg_color = "#000000"; self.cell_bg = "#f8f8f8"
             self.line_color = "#e0e0e0"; self.lunar_color = "#888888"; self.term_color = "#2ba347"
+            self.sun_color = "#ff6b6b"; self.sat_color = "#4dabf7"
         else:
             self.bg_color = "#121212"; self.fg_color = "#ffffff"; self.cell_bg = "#1e1e1e"
             self.line_color = "#333333"; self.lunar_color = "#aaaaaa"; self.term_color = "#2ecc71"
+            self.sun_color = "#ff6b6b"; self.sat_color = "#74b9ff"
 
     def setup_ui(self):
+        for w in self.root.winfo_children(): w.destroy()
+        
         self.header_frame = tk.Frame(self.root, bg=self.bg_color)
         self.header_frame.pack(fill="x", pady=10, padx=10)
         
         l_f = tk.Frame(self.header_frame, bg=self.bg_color); l_f.pack(side="left")
-        tk.Button(l_f, text="◀", command=self.prev_month, bg=self.bg_color, fg=self.fg_color, bd=0, font=("Arial", 14)).pack(side="left", padx=5)
+        tk.Button(l_f, text="◀", command=self.prev_view, bg=self.bg_color, fg=self.fg_color, bd=0, font=("Arial", 14)).pack(side="left", padx=5)
         self.month_label = tk.Label(l_f, text="", font=(self.font_family, 18, "bold"), fg=self.fg_color, bg=self.bg_color, width=12)
         self.month_label.pack(side="left")
-        tk.Button(l_f, text="▶", command=self.next_month, bg=self.bg_color, fg=self.fg_color, bd=0, font=("Arial", 14)).pack(side="left", padx=5)
+        tk.Button(l_f, text="▶", command=self.next_view, bg=self.bg_color, fg=self.fg_color, bd=0, font=("Arial", 14)).pack(side="left", padx=5)
         
-        # 오늘 버튼과 시계
-        tk.Button(l_f, text="오늘", command=self.go_today, bg="#1a73e8", fg="white", bd=0, font=(self.font_family, 10, "bold"), padx=10).pack(side="left", padx=10)
-        self.clock_label = tk.Label(l_f, text="", font=(self.font_family, 12), fg=self.fg_color, bg=self.bg_color)
+        # 오늘 버튼, 보기 전환, 검색 버튼
+        btn_f = tk.Frame(self.header_frame, bg=self.bg_color)
+        btn_f.pack(side="left", padx=10)
+        
+        tk.Button(btn_f, text="오늘", command=self.go_today, bg="#1a73e8", fg="white", bd=0, font=(self.font_family, 9, "bold"), padx=10).pack(side="left", padx=2)
+        
+        self.view_btn = tk.Button(btn_f, text="주간 보기" if self.view_mode=="monthly" else "월간 보기", command=self.toggle_view_mode, bg="#444", fg="white", bd=0, font=(self.font_family, 9), padx=10)
+        self.view_btn.pack(side="left", padx=2)
+        
+        tk.Button(btn_f, text="🔍 검색/목록", command=self.open_agenda, bg="#2d3436", fg="white", bd=0, font=(self.font_family, 9, "bold"), padx=10).pack(side="left", padx=2)
+
+        self.clock_label = tk.Label(self.header_frame, text="", font=(self.font_family, 12), fg=self.fg_color, bg=self.bg_color)
         self.clock_label.pack(side="left", padx=10)
         
         tk.Button(self.header_frame, text="✖", command=self.on_exit, bg=self.bg_color, fg=self.fg_color, bd=0, font=("Arial", 14)).pack(side="right", padx=5)
@@ -109,7 +126,6 @@ class GridCalendarApp:
         self.pin_btn.pack(side="right", padx=5)
         
         tk.Button(self.header_frame, text="⚙️ 설정", command=self.open_settings, bg="#444444", fg="white", bd=0, font=(self.font_family, 10)).pack(side="right", padx=5)
-        tk.Button(self.header_frame, text="🔄 새로고침", command=self.manual_refresh, bg="#2d3436", fg="white", bd=0, font=(self.font_family, 10)).pack(side="right", padx=5)
         
         self.grid_frame = tk.Frame(self.root, bg=self.bg_color)
         self.grid_frame.pack(fill="both", expand=True, padx=10, pady=5)
@@ -118,13 +134,107 @@ class GridCalendarApp:
         threading.Thread(target=self.setup_tray, daemon=True).start()
 
     def draw_calendar(self, year, month):
+        if self.view_mode == "monthly":
+            self.draw_monthly(year, month)
+        else:
+            self.draw_weekly()
+
+    def draw_weekly(self):
+        # 주간 보기 제목 설정 (예: 4월 1주)
+        start_of_week = self.current_date - datetime.timedelta(days=(self.current_date.weekday() + 1) % 7)
+        self.month_label.config(text=f"{start_of_week.month}월 {((start_of_week.day-1)//7)+1}주")
+        
+        for w in self.grid_frame.winfo_children(): w.destroy()
+        
+        days = ["일", "월", "화", "수", "목", "금", "토"]
+        for c, d in enumerate(days):
+            self.grid_frame.grid_columnconfigure(c, weight=1, uniform="col") 
+            day_c = self.sun_color if c == 0 else self.sat_color if c == 6 else self.fg_color
+            lbl = tk.Label(self.grid_frame, text=d, font=(self.font_family, 11, "bold"), fg=day_c, bg=self.bg_color)
+            lbl.grid(row=0, column=c, sticky="nsew", pady=(0, 5))
+
+        self.grid_frame.grid_rowconfigure(1, weight=1)
+        now = datetime.datetime.now().date()
+        
+        for i in range(7):
+            day_date = start_of_week + datetime.timedelta(days=i)
+            target_date = day_date.strftime("%Y-%m-%d")
+            
+            all_hols = [h for h in self.holiday_data if target_date in h['start'].get('date', '')]
+            red_hols = [h for h in all_hols if self.utils.is_red_holiday(h.get('summary', ''))]
+            
+            is_today = (day_date == now)
+            current_cell_bg = ("#1a2a40" if self.theme == "black" else "#e3f2fd") if is_today else self.cell_bg
+            border_c = "#1a73e8" if is_today else self.line_color
+            border_w = 2 if is_today else 1
+            day_c = self.sun_color if (i == 0 or red_hols) else self.sat_color if i == 6 else self.fg_color
+            
+            f = tk.Frame(self.grid_frame, bg=current_cell_bg, highlightbackground=border_c, highlightcolor=border_c, highlightthickness=border_w)
+            f.grid(row=1, column=i, sticky="nsew", padx=1, pady=1)
+            
+            h_f = tk.Frame(f, bg=current_cell_bg); h_f.pack(fill="x", padx=5, pady=2)
+            tk.Label(h_f, text=f"{day_date.day}", font=(self.font_family, self.font_size+2, "bold"), fg=day_c, bg=current_cell_bg).pack(side="left")
+            
+            lunar = self.utils.get_lunar_date(day_date.year, day_date.month, day_date.day)
+            tk.Label(h_f, text=lunar, font=(self.font_family, max(7, self.font_size-2)), fg=self.lunar_color, bg=current_cell_bg).pack(side="right")
+
+            evts = [e for e in self.events_data if target_date in e.get('start', {}).get('dateTime', e.get('start', {}).get('date', ''))]
+            evts = self.sort_events(evts)
+            
+            handler = lambda e, y=day_date.year, m=day_date.month, d=day_date.day, h=all_hols, ev=evts: self.show_day_details(y, m, d, h, ev)
+            f.bind("<Button-1>", handler)
+
+            for evt in evts[:12]:
+                summary = evt.get('summary', '무제')
+                is_done = summary.startswith("✅")
+                evt_color = self.api.get_event_color(evt.get('colorId'))
+                if is_done: evt_color = "#555555"
+                
+                evt_row = tk.Frame(f, bg=current_cell_bg)
+                evt_row.pack(fill="x", padx=2, pady=1)
+                evt_row.bind("<Button-1>", handler)
+
+                canvas = tk.Canvas(evt_row, width=8, height=8, bg=current_cell_bg, highlightthickness=0)
+                canvas.pack(side="left", padx=(2, 4))
+                canvas.create_oval(1, 1, 7, 7, fill=evt_color, outline=evt_color)
+                
+                t = evt['start'].get('dateTime', '종일')[11:16] if 'dateTime' in evt['start'] else ""
+                display_text = f"[{t}] {summary}" if t else summary
+                tk.Label(evt_row, text=display_text, font=(self.font_family, max(8, self.font_size-1)), 
+                         fg="#888888" if is_done else self.fg_color, bg=current_cell_bg, anchor="w").pack(side="left", fill="x")
+
+    def toggle_view_mode(self):
+        self.view_mode = "weekly" if self.view_mode == "monthly" else "monthly"
+        self.view_btn.config(text="월간 보기" if self.view_mode == "weekly" else "주간 보기")
+        self.update_calendar()
+
+    def prev_view(self):
+        if self.view_mode == "monthly":
+            self.prev_month()
+        else:
+            self.current_date -= datetime.timedelta(days=7)
+            self.current_year, self.current_month = self.current_date.year, self.current_date.month
+            self.update_calendar()
+
+    def next_view(self):
+        if self.view_mode == "monthly":
+            self.next_month()
+        else:
+            self.current_date += datetime.timedelta(days=7)
+            self.current_year, self.current_month = self.current_date.year, self.current_date.month
+            self.update_calendar()
+
+    def open_agenda(self):
+        AgendaWindow(self.root, self)
+
+    def draw_monthly(self, year, month):
         self.month_label.config(text=f"{year}년 {month}월")
         for w in self.grid_frame.winfo_children(): w.destroy()
         
         days = ["일", "월", "화", "수", "목", "금", "토"]
         for c, d in enumerate(days):
             self.grid_frame.grid_columnconfigure(c, weight=1, uniform="col") 
-            day_c = "#ff6b6b" if c == 0 else "#74b9ff" if c == 6 else self.fg_color
+            day_c = self.sun_color if c == 0 else self.sat_color if c == 6 else self.fg_color
             lbl = tk.Label(self.grid_frame, text=d, font=(self.font_family, 11, "bold"), fg=day_c, bg=self.bg_color)
             lbl.grid(row=0, column=c, sticky="nsew", pady=(0, 5))
 
@@ -143,7 +253,7 @@ class GridCalendarApp:
                 current_cell_bg = ("#1a2a40" if self.theme == "black" else "#e3f2fd") if is_today else self.cell_bg
                 border_c = "#1a73e8" if is_today else self.line_color
                 border_w = 2 if is_today else 1
-                day_c = "#ff6b6b" if (c == 0 or len(red_hols) > 0) else "#74b9ff" if c == 6 else self.fg_color
+                day_c = self.sun_color if (c == 0 or len(red_hols) > 0) else self.sat_color if c == 6 else self.fg_color
                 
                 f = tk.Frame(self.grid_frame, bg=current_cell_bg, highlightbackground=border_c, highlightcolor=border_c, highlightthickness=border_w)
                 f.grid(row=r+1, column=c, sticky="nsew", padx=1, pady=1)

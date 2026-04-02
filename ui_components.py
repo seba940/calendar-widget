@@ -413,3 +413,117 @@ class SettingsWindow:
             self.win.destroy()
         except Exception as e:
             messagebox.showerror("오류", f"설정 저장 중 오류 발생: {e}")
+
+class AgendaWindow:
+    def __init__(self, parent, app):
+        self.app = app
+        self.win = tk.Toplevel(parent)
+        self.win.title("일정 검색 및 목록")
+        self.win.geometry("500x600")
+        self.win.attributes("-topmost", True)
+        self.win.configure(bg=app.bg_color, padx=20, pady=20)
+        
+        tk.Label(self.win, text="🔍 일정 검색 및 목록", font=(app.font_family, 16, "bold"), bg=app.bg_color, fg=app.fg_color).pack(pady=(0, 15))
+
+        # 검색창
+        search_frame = tk.Frame(self.win, bg=app.bg_color)
+        search_frame.pack(fill="x", pady=(0, 15))
+        
+        self.search_ent = tk.Entry(search_frame, font=(app.font_family, 11))
+        self.search_ent.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.search_ent.bind("<Return>", lambda e: self.search())
+        
+        tk.Button(search_frame, text="검색", command=self.search, bg="#1a73e8", fg="white", font=(app.font_family, 10, "bold"), padx=10).pack(side="left")
+
+        # 결과 리스트 (스크롤 가능)
+        list_container = tk.Frame(self.win, bg=app.bg_color)
+        list_container.pack(fill="both", expand=True)
+        
+        self.canvas = tk.Canvas(list_container, bg=app.bg_color, highlightthickness=0)
+        self.scrollbar = ttk.Scrollbar(list_container, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = tk.Frame(self.canvas, bg=app.bg_color)
+
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw", width=440)
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+
+        # 마우스 휠 스크롤 지원
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+
+        self.refresh_upcoming()
+
+    def _on_mousewheel(self, event):
+        self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+    def refresh_upcoming(self):
+        self.clear_list()
+        tk.Label(self.scrollable_frame, text="⏳ 다가오는 일정 불러오는 중...", fg=self.app.fg_color, bg=self.app.bg_color).pack(pady=20)
+        self.win.after(100, self._fetch_upcoming)
+
+    def _fetch_upcoming(self):
+        evts = self.app.api.fetch_upcoming_events(max_results=30)
+        self.display_results(evts, "📅 다가오는 일정")
+
+    def search(self):
+        query = self.search_ent.get().strip()
+        if not query:
+            self.refresh_upcoming()
+            return
+        
+        self.clear_list()
+        tk.Label(self.scrollable_frame, text=f"🔍 '{query}' 검색 중...", fg=self.app.fg_color, bg=self.app.bg_color).pack(pady=20)
+        self.win.after(100, lambda: self._do_search(query))
+
+    def _do_search(self, query):
+        evts = self.app.api.search_events(query)
+        self.display_results(evts, f"🔍 '{query}' 검색 결과")
+
+    def clear_list(self):
+        for w in self.scrollable_frame.winfo_children(): w.destroy()
+
+    def display_results(self, evts, title):
+        self.clear_list()
+        tk.Label(self.scrollable_frame, text=title, font=(self.app.font_family, 12, "bold"), fg=self.app.fg_color, bg=self.app.bg_color).pack(anchor="w", pady=(0, 10))
+        
+        if not evts:
+            tk.Label(self.scrollable_frame, text="일정이 없습니다.", fg="#888", bg=self.app.bg_color).pack(pady=20)
+            return
+
+        for e in evts:
+            e_frame = tk.Frame(self.scrollable_frame, bg="#333" if self.app.theme=="black" else "#f0f0f0", padx=10, pady=10)
+            e_frame.pack(fill="x", pady=5)
+            
+            # 날짜 표시
+            start = e['start'].get('dateTime', e['start'].get('date', ''))
+            date_part = start[:10]
+            time_part = start[11:16] if 'T' in start else "종일"
+            
+            tk.Label(e_frame, text=f"{date_part} ({time_part})", font=(self.app.font_family, 9), fg=self.app.lunar_color, bg=e_frame["bg"]).pack(anchor="w")
+            
+            summary = e.get('summary', '무제')
+            tk.Label(e_frame, text=summary, font=(self.app.font_family, 11, "bold"), fg=self.app.fg_color, bg=e_frame["bg"]).pack(anchor="w")
+            
+            desc = e.get('description', '')
+            if desc:
+                tk.Label(e_frame, text=desc, font=(self.app.font_family, 9), fg="#aaa", bg=e_frame["bg"], wraplength=400, justify="left").pack(anchor="w")
+
+            # 클릭 시 해당 날짜로 이동 및 상세 창 열기 기능 (선택 사항)
+            e_frame.bind("<Button-1>", lambda event, d=date_part: self.go_to_date(d))
+            for child in e_frame.winfo_children():
+                child.bind("<Button-1>", lambda event, d=date_part: self.go_to_date(d))
+
+    def go_to_date(self, date_str):
+        # YYYY-MM-DD 형식
+        y, m, d = map(int, date_str.split('-'))
+        self.app.current_year = y
+        self.app.current_month = m
+        self.app.update_calendar()
+        # 해당 날짜 상세 창 열기 (필요시)
+        # self.win.destroy()
