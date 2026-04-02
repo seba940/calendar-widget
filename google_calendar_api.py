@@ -13,8 +13,10 @@ class GoogleCalendarAPI:
     def __init__(self):
         self.service = None
         self.holiday_calendar_id = 'ko.south_korea#holiday@group.v.calendar.google.com'
+        self.event_colors = {}  # 일정 색상 맵
 
     def authenticate(self):
+        # ... (기존 코드와 동일)
         creds = None
         if os.path.exists('token.json'):
             creds = Credentials.from_authorized_user_file('token.json', SCOPES)
@@ -58,17 +60,19 @@ class GoogleCalendarAPI:
         authed_http = AuthorizedHttp(creds, http=http_client)
         self.service = build('calendar', 'v3', http=authed_http, static_discovery=False)
         self.find_holiday_calendar()
+        self.fetch_color_definitions() # 색상 정보 가져오기 추가
         return self.service
 
-    def find_holiday_calendar(self):
-        if not self.service: return
+    def fetch_color_definitions(self):
         try:
-            calendar_list = self.service.calendarList().list().execute()
-            for entry in calendar_list.get('items', []):
-                if "holiday" in entry.get('summary', '').lower() or "휴일" in entry.get('summary', ''):
-                    self.holiday_calendar_id = entry['id']
-                    break
+            colors = self.service.colors().get().execute()
+            self.event_colors = colors.get('event', {})
         except: pass
+
+    def get_event_color(self, color_id):
+        # colorId가 없으면 기본 캘린더 색상(보통 파란색 계열) 사용
+        color_info = self.event_colors.get(color_id, {})
+        return color_info.get('background', '#1a73e8') # 기본값 구글 블루
 
     def fetch_events(self, year, month):
         if not self.service: return [], []

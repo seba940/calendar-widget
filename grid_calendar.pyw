@@ -9,6 +9,9 @@ import socket
 import ssl 
 import urllib.request
 import traceback
+from PIL import Image, ImageDraw
+import pystray
+from pystray import MenuItem as item
 
 from google_calendar_api import GoogleCalendarAPI
 from calendar_utils import CalendarUtils
@@ -47,6 +50,7 @@ class GridCalendarApp:
         self.font_family = self.config.settings.get("font_family", "Malgun Gothic").lstrip("@")
         self.font_size = self.config.settings.get("font_size", 10)
         self.is_pinned = self.config.settings.get("is_pinned", False)
+        self.tray_icon = None
         
         self.set_theme_colors(self.theme)
         self.root.geometry(self.config.settings.get("geometry", "1000x800+100+100"))
@@ -89,9 +93,14 @@ class GridCalendarApp:
         
         l_f = tk.Frame(self.header_frame, bg=self.bg_color); l_f.pack(side="left")
         tk.Button(l_f, text="◀", command=self.prev_month, bg=self.bg_color, fg=self.fg_color, bd=0, font=("Arial", 14)).pack(side="left", padx=5)
-        self.month_label = tk.Label(l_f, text="", font=(self.font_family, 18, "bold"), fg=self.fg_color, bg=self.bg_color, width=14)
+        self.month_label = tk.Label(l_f, text="", font=(self.font_family, 18, "bold"), fg=self.fg_color, bg=self.bg_color, width=12)
         self.month_label.pack(side="left")
         tk.Button(l_f, text="▶", command=self.next_month, bg=self.bg_color, fg=self.fg_color, bd=0, font=("Arial", 14)).pack(side="left", padx=5)
+        
+        # 오늘 버튼과 시계
+        tk.Button(l_f, text="오늘", command=self.go_today, bg="#1a73e8", fg="white", bd=0, font=(self.font_family, 10, "bold"), padx=10).pack(side="left", padx=10)
+        self.clock_label = tk.Label(l_f, text="", font=(self.font_family, 12), fg=self.fg_color, bg=self.bg_color)
+        self.clock_label.pack(side="left", padx=10)
         
         tk.Button(self.header_frame, text="✖", command=self.on_exit, bg=self.bg_color, fg=self.fg_color, bd=0, font=("Arial", 14)).pack(side="right", padx=5)
         
@@ -104,6 +113,9 @@ class GridCalendarApp:
         
         self.grid_frame = tk.Frame(self.root, bg=self.bg_color)
         self.grid_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        self.update_clock()
+        threading.Thread(target=self.setup_tray, daemon=True).start()
 
     def draw_calendar(self, year, month):
         self.month_label.config(text=f"{year}년 {month}월")
@@ -154,11 +166,31 @@ class GridCalendarApp:
                 
                 handler = lambda e, y=year, m=month, d=day, h=all_hols, ev=evts: self.show_day_details(y, m, d, h, ev)
                 f.bind("<Button-1>", handler)
+
                 for evt in evts[:3]:
                     summary = evt.get('summary', '무제')
                     is_done = summary.startswith("✅")
                     color = "#888888" if is_done else self.fg_color
-                    tk.Label(f, text=f"• {summary}", font=(self.font_family, max(8, self.font_size-2)), fg=color, bg=current_cell_bg, anchor="w").pack(fill="x", padx=2)
+                    
+                    # 구글 캘린더 색상 가져오기
+                    evt_color = self.api.get_event_color(evt.get('colorId'))
+                    if is_done: evt_color = "#555555" # 완료된 일정은 색상도 흐리게
+
+                    # 일정 한 줄을 위한 프레임
+                    evt_row = tk.Frame(f, bg=current_cell_bg)
+                    evt_row.pack(fill="x", padx=2, pady=1)
+                    evt_row.bind("<Button-1>", handler) # 클릭 이벤트 전파
+
+                    # 둥근 사각형 색상 블록 (Canvas 이용)
+                    canvas = tk.Canvas(evt_row, width=10, height=10, bg=current_cell_bg, highlightthickness=0)
+                    canvas.pack(side="left", padx=(2, 4))
+                    
+                    # 둥근 사각형 그리기 (여기서는 아주 작은 원/타원으로 둥근 느낌 구현)
+                    canvas.create_oval(1, 1, 9, 9, fill=evt_color, outline=evt_color)
+                    canvas.bind("<Button-1>", handler)
+
+                    tk.Label(evt_row, text=summary, font=(self.font_family, max(8, self.font_size-2)), 
+                             fg=color, bg=current_cell_bg, anchor="w").pack(side="left", fill="x")
 
     def show_day_details(self, year, month, day, hols, evts):
         if self.detail_win_instance and self.detail_win_instance.win.winfo_exists():
@@ -259,8 +291,49 @@ class GridCalendarApp:
     def manual_refresh(self): self.update_calendar()
     def auto_sync(self): self.update_calendar(); self.root.after(600000, self.auto_sync)
     def toggle_pin(self): self.is_pinned = not self.is_pinned; self.pin_btn.config(text="📍 고정해제" if self.is_pinned else "📌 고정하기"); self.save_settings()
-    def on_exit(self): self.save_settings(); self.root.destroy()
-    def save_settings(self): self.config.save_settings({"geometry": self.root.winfo_geometry(), "alpha": self.alpha_val, "theme": self.theme, "font_family": self.font_family, "font_size": self.font_size, "is_pinned": self.is_pinned})
+    def on_exit(self): 
+        self.save_settings()
+        if self.tray_icon: self.tray_icon.stop()
+        self.root.destroy()
+
+    def update_clock(self):
+        now = datetime.datetime.now()
+        self.clock_label.config(text=now.strftime("%H:%M:%S"))
+        self.root.after(1000, self.update_clock)
+
+    def go_today(self):
+        now = datetime.datetime.now()
+        self.current_year = now.year
+        self.current_month = now.month
+        self.update_calendar()
+
+    def setup_tray(self):
+        menu = (item('보이기', self.show_window), item('종료', self.on_exit))
+        self.tray_icon = pystray.Icon("calendar_widget", self.create_tray_image(), "Calendar Widget", menu)
+        self.tray_icon.run()
+
+    def create_tray_image(self):
+        width = 64; height = 64
+        image = Image.new('RGB', (width, height), color=(30, 30, 30))
+        dc = ImageDraw.Draw(image)
+        dc.rectangle([10, 10, 54, 54], fill=(26, 115, 232))
+        dc.text((15, 15), "CAL", fill=(255, 255, 255))
+        return image
+
+    def show_window(self):
+        self.root.after(0, self.root.deiconify)
+        self.root.after(0, lambda: self.root.attributes("-topmost", True))
+        self.root.after(10, lambda: self.root.attributes("-topmost", False))
+
+    def save_settings(self): 
+        self.config.save_settings({
+            "geometry": self.root.winfo_geometry(), 
+            "alpha": self.alpha_val, 
+            "theme": self.theme, 
+            "font_family": self.font_family, 
+            "font_size": self.font_size, 
+            "is_pinned": self.is_pinned
+        })
     
     def on_press(self, e):
         if self.is_pinned: return
@@ -275,8 +348,15 @@ class GridCalendarApp:
         self.root.config(cursor="size_nw_se" if (e.x > self.root.winfo_width()-20 and e.y > self.root.winfo_height()-20) else "")
     def on_resize(self, e):
         if e.widget == self.root: self.draw_calendar(self.current_year, self.current_month)
-    def prev_month(self): self.current_month=12 if self.current_month==1 else self.current_month-1; self.current_year-=(1 if self.current_month==12 else 0); self.update_calendar()
-    def next_month(self): self.current_month=1 if self.current_month==12 else self.current_month+1; self.current_year+=(1 if self.current_month==1 else 0); self.update_calendar()
+    def prev_month(self): 
+        self.current_month=12 if self.current_month==1 else self.current_month-1
+        self.current_year-=(1 if self.current_month==12 else 0)
+        self.update_calendar()
+    def next_month(self): 
+        self.current_month=1 if self.current_month==12 else self.current_month+1
+        self.current_year+=(1 if self.current_month==1 else 0)
+        self.update_calendar()
+
     def open_settings(self): 
         if self.settings_win_instance and self.settings_win_instance.win.winfo_exists():
             self.settings_win_instance.win.destroy()
