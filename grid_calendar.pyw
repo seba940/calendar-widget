@@ -180,8 +180,10 @@ class GridCalendarApp:
             
             f = tk.Frame(self.grid_frame, bg=current_cell_bg, highlightbackground=border_c, highlightcolor=border_c, highlightthickness=border_w)
             f.grid(row=1, column=i, sticky="nsew", padx=1, pady=1)
+            f.date_str = target_date
             
             h_f = tk.Frame(f, bg=current_cell_bg); h_f.pack(fill="x", padx=5, pady=2)
+            h_f.date_str = target_date
             tk.Label(h_f, text=f"{day_date.day}", font=(self.font_family, self.font_size+2, "bold"), fg=day_c, bg=current_cell_bg).pack(side="left")
             
             lunar = self.utils.get_lunar_date(day_date.year, day_date.month, day_date.day)
@@ -291,8 +293,10 @@ class GridCalendarApp:
                 
                 f = tk.Frame(self.grid_frame, bg=current_cell_bg, highlightbackground=border_c, highlightcolor=border_c, highlightthickness=border_w)
                 f.grid(row=r+1, column=c, sticky="nsew", padx=1, pady=1)
+                f.date_str = target_date
                 
                 h_f = tk.Frame(f, bg=current_cell_bg); h_f.pack(fill="x", padx=5, pady=2)
+                h_f.date_str = target_date
                 tk.Label(h_f, text=str(day), font=(self.font_family, self.font_size, "bold"), fg=day_c, bg=current_cell_bg).pack(side="left")
                 tk.Label(h_f, text=self.utils.get_lunar_date(year, month, day), font=(self.font_family, max(7, self.font_size-3)), fg=self.lunar_color, bg=current_cell_bg).pack(side="right")
                 
@@ -362,10 +366,74 @@ class GridCalendarApp:
     def on_drag_start(self, event, event_data):
         self._drag_data = {"event_data": event_data}
 
-    def on_drag_stop(self, event, y, m, d, hols):
+    def on_drag_stop(self, event):
         if not self._drag_data: return
-        # 드래그 앤 드롭 정렬 로직은 DetailWindow와 연계하여 구현
+        
+        # 마우스 위치의 위젯 찾기
+        x, y_root = event.x_root, event.y_root
+        target_widget = self.root.winfo_containing(x, y_root)
+        
+        # 위젯을 타고 올라가며 date_str 속성이 있는 프레임 찾기
+        target_date = None
+        curr = target_widget
+        while curr:
+            if hasattr(curr, 'date_str'):
+                target_date = curr.date_str
+                break
+            if hasattr(curr, 'master'):
+                curr = curr.master
+            else:
+                break
+            
+        if target_date:
+            event_data = self._drag_data["event_data"]
+            if messagebox.askyesno("일정 이동", f"'{event_data.get('summary')}' 일정을 {target_date}로 이동하시겠습니까?"):
+                self.move_event_to_date(event_data, target_date)
+        
         self._drag_data = None
+
+    def move_event_to_date(self, event_data, target_date):
+        body = {}
+        start = event_data['start']
+        end = event_data['end']
+        
+        if 'date' in start:
+            # 종일 일정
+            body['start'] = {'date': target_date}
+            target_dt = datetime.datetime.strptime(target_date, "%Y-%m-%d")
+            end_dt = target_dt + datetime.timedelta(days=1)
+            body['end'] = {'date': end_dt.strftime("%Y-%m-%d")}
+        else:
+            # 시간 지정 일정
+            orig_start = start['dateTime']
+            orig_end = end['dateTime']
+            time_part_start = orig_start.split('T')[1]
+            
+            # 종료일 계산 (시작일과 종료일의 차이 유지)
+            # ISO format handling (Z or timezone offset)
+            def parse_iso(dt_str):
+                return datetime.datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+
+            orig_start_dt = parse_iso(orig_start)
+            orig_end_dt = parse_iso(orig_end)
+            delta = orig_end_dt - orig_start_dt
+            
+            # 새 시작 시간 (타겟 날짜 + 원본 시간)
+            # time_part_start might have timezone info like +09:00
+            new_start_str = f"{target_date}T{time_part_start}"
+            new_start_dt = parse_iso(new_start_str)
+            new_end_dt = new_start_dt + delta
+            
+            body['start'] = {'dateTime': new_start_dt.isoformat(), 'timeZone': 'Asia/Seoul'}
+            body['end'] = {'dateTime': new_end_dt.isoformat(), 'timeZone': 'Asia/Seoul'}
+
+        try:
+            self.api.patch_event(event_data['id'], body)
+            self.manual_refresh()
+            if self.detail_win_instance:
+                self.detail_win_instance.win.destroy()
+        except Exception as e:
+            messagebox.showerror("오류", f"일정 이동 중 오류 발생: {e}")
 
     def toggle_complete(self, event):
         summary = event.get('summary', '')

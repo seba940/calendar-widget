@@ -110,7 +110,7 @@ class DetailWindow:
             drag_handle.pack(side="left", padx=(0, 5))
             
             drag_handle.bind("<Button-1>", lambda event, evt=e: self.app.on_drag_start(event, evt))
-            drag_handle.bind("<ButtonRelease-1>", lambda event: self.app.on_drag_stop(event, self.year, self.month, self.day, self.hols))
+            drag_handle.bind("<ButtonRelease-1>", lambda event: self.app.on_drag_stop(event))
             
             t = e['start'].get('dateTime', '종일')[11:16] if 'dateTime' in e['start'] else "종일"
             summary_text = e.get('summary', '무제')
@@ -143,11 +143,35 @@ class EventPopup:
         self.event = event
         self.win = tk.Toplevel(parent)
         self.win.title("일정 추가" if not event else "일정 수정")
-        self.win.geometry("450x650") # 높이 증가
+        self.win.geometry("450x700") # 높이 증가
         self.win.attributes("-topmost", True)
         self.win.configure(bg=app.bg_color, padx=30, pady=20)
         
-        tk.Label(self.win, text=f"🗓 {date_str} 일정", font=(app.font_family, 14, "bold"), bg=app.bg_color, fg=app.fg_color).pack(pady=(0, 15))
+        tk.Label(self.win, text="📅 일정 정보", font=(app.font_family, 14, "bold"), bg=app.bg_color, fg=app.fg_color).pack(pady=(0, 15))
+
+        # 날짜 설정
+        tk.Label(self.win, text="📅 날짜 설정", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        date_frame = tk.Frame(self.win, bg=app.bg_color)
+        date_frame.pack(fill="x", pady=(5, 10))
+
+        curr_year = datetime.datetime.now().year
+        self.year_cb = ttk.Combobox(date_frame, values=[str(y) for y in range(curr_year - 5, curr_year + 6)], width=6, state="readonly")
+        self.year_cb.pack(side="left")
+        tk.Label(date_frame, text="년", bg=app.bg_color, fg=app.fg_color).pack(side="left", padx=(2, 5))
+
+        self.month_cb = ttk.Combobox(date_frame, values=[f"{m:02d}" for m in range(1, 13)], width=4, state="readonly")
+        self.month_cb.pack(side="left")
+        tk.Label(date_frame, text="월", bg=app.bg_color, fg=app.fg_color).pack(side="left", padx=(2, 5))
+
+        self.day_cb = ttk.Combobox(date_frame, values=[f"{d:02d}" for d in range(1, 32)], width=4, state="readonly")
+        self.day_cb.pack(side="left")
+        tk.Label(date_frame, text="일", bg=app.bg_color, fg=app.fg_color).pack(side="left", padx=(2, 5))
+
+        # 날짜 초기값 설정
+        y, m, d = map(int, date_str.split('-'))
+        self.year_cb.set(str(y))
+        self.month_cb.set(f"{m:02d}")
+        self.day_cb.set(f"{d:02d}")
 
         # 제목
         tk.Label(self.win, text="📝 제목", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
@@ -295,6 +319,9 @@ class EventPopup:
         memo = self.memo_ent.get("1.0", "end-1c").strip()
         repeat = self.repeat_var.get()
         
+        # 선택된 날짜 가져오기
+        selected_date = f"{self.year_cb.get()}-{self.month_cb.get()}-{self.day_cb.get()}"
+        
         if not summary:
             messagebox.showwarning("입력 누락", "일정 제목을 입력해 주세요.")
             return
@@ -303,23 +330,23 @@ class EventPopup:
         
         # 시간 처리
         if is_all_day:
-            start_dt = datetime.datetime.strptime(self.date_str, "%Y-%m-%d")
+            start_dt = datetime.datetime.strptime(selected_date, "%Y-%m-%d")
             end_dt = start_dt + datetime.timedelta(days=1)
-            body['start'] = {'date': self.date_str}
+            body['start'] = {'date': selected_date}
             body['end'] = {'date': end_dt.strftime("%Y-%m-%d")}
         else:
             start_time_str = f"{self.hour_cb.get()}:{self.min_cb.get()}"
             end_time_str = f"{self.end_hour_cb.get()}:{self.end_min_cb.get()}"
             try:
-                start_dt_str = f"{self.date_str}T{start_time_str}:00"
+                start_dt_str = f"{selected_date}T{start_time_str}:00"
                 
                 # 종료 시간이 시작 시간보다 빠른 경우 다음날로 처리
                 if end_time_str <= start_time_str:
-                    curr_dt = datetime.datetime.strptime(self.date_str, "%Y-%m-%d")
+                    curr_dt = datetime.datetime.strptime(selected_date, "%Y-%m-%d")
                     next_dt = curr_dt + datetime.timedelta(days=1)
                     end_dt_str = f"{next_dt.strftime('%Y-%m-%d')}T{end_time_str}:00"
                 else:
-                    end_dt_str = f"{self.date_str}T{end_time_str}:00"
+                    end_dt_str = f"{selected_date}T{end_time_str}:00"
 
                 body['start'] = {'dateTime': start_dt_str, 'timeZone': 'Asia/Seoul'}
                 body['end'] = {'dateTime': end_dt_str, 'timeZone': 'Asia/Seoul'}
