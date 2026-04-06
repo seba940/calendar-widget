@@ -224,6 +224,7 @@ class GridCalendarApp:
 
             memo_txt = tk.Text(memo_f, font=(self.font_family, max(9, self.font_size-1)), 
                                bg=current_cell_bg, fg=self.lunar_color, bd=0, 
+                               insertbackground=self.fg_color, insertwidth=2,
                                highlightthickness=0, undo=True, wrap="word")
             memo_txt.pack(fill="both", expand=True)
             
@@ -236,7 +237,6 @@ class GridCalendarApp:
             memo_txt.bind("<FocusOut>", lambda e, d=target_date, t=memo_txt: self.save_memo(d, t.get("1.0", "end-1c")))
             
             # 클릭 시 메모장에 포커스 (프레임 클릭 방지)
-            memo_txt.bind("<Button-1>", lambda e: "break") 
             memo_f.bind("<Button-1>", lambda e, t=memo_txt: t.focus_set())
 
     def toggle_view_mode(self):

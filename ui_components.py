@@ -235,7 +235,7 @@ class EventPopup:
 
         # 메모 (Description)
         tk.Label(self.win, text="🗒 메모", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
-        self.memo_ent = tk.Text(self.win, font=(app.font_family, 10), height=4)
+        self.memo_ent = tk.Text(self.win, font=(app.font_family, 10), height=4, insertbackground=app.fg_color, insertwidth=2)
         self.memo_ent.pack(fill="x", pady=(5, 10))
         if event and event.get('description'):
             self.memo_ent.insert("1.0", event.get('description'))
