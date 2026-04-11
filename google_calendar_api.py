@@ -64,6 +64,20 @@ class GoogleCalendarAPI:
         self.fetch_color_definitions() # 색상 정보 가져오기 추가
         return self.service
 
+    def find_holiday_calendar(self):
+        """대한민국 공휴일 캘린더 ID를 찾거나 기본값을 유지합니다."""
+        if not self.service: return
+        try:
+            calendars = self.service.calendarList().list().execute().get('items', [])
+            for cal in calendars:
+                summary = cal.get('summary', '').lower()
+                # 영어 또는 한국어 명칭으로 대한민국 공휴일 캘린더 검색
+                if ('holiday' in summary or '공휴일' in summary) and ('south korea' in summary or '대한민국' in summary):
+                    self.holiday_calendar_id = cal.get('id')
+                    break
+        except Exception as e:
+            print(f"공휴일 캘린더 검색 실패: {e}")
+
     def fetch_color_definitions(self):
         try:
             colors = self.service.colors().get().execute()

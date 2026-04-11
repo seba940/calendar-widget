@@ -110,8 +110,9 @@ class GridCalendarApp:
         
         l_f = tk.Frame(self.header_frame, bg=self.bg_color); l_f.pack(side="left")
         tk.Button(l_f, text="◀", command=self.prev_view, bg=self.bg_color, fg=self.fg_color, bd=0, font=("Arial", 14)).pack(side="left", padx=5)
-        self.month_label = tk.Label(l_f, text="", font=(self.font_family, 18, "bold"), fg=self.fg_color, bg=self.bg_color, width=12)
+        self.month_label = tk.Label(l_f, text="", font=(self.font_family, 18, "bold"), fg=self.fg_color, bg=self.bg_color, width=12, cursor="hand2")
         self.month_label.pack(side="left")
+        self.month_label.bind("<Button-1>", lambda e: self.open_jump_popup())
         tk.Button(l_f, text="▶", command=self.next_view, bg=self.bg_color, fg=self.fg_color, bd=0, font=("Arial", 14)).pack(side="left", padx=5)
         
         # 오늘 버튼, 보기 전환, 검색 버튼
@@ -188,6 +189,17 @@ class GridCalendarApp:
             
             lunar = self.utils.get_lunar_date(day_date.year, day_date.month, day_date.day)
             tk.Label(h_f, text=lunar, font=(self.font_family, max(7, self.font_size-2)), fg=self.lunar_color, bg=current_cell_bg).pack(side="right")
+
+            for h in all_hols: 
+                summary = h.get('summary', '')
+                # '대체' 또는 '쉬는날'이 포함된 경우 '대체공휴일'로 변환
+                if "대체" in summary or "쉬는날" in summary:
+                    summary = summary.replace("공휴일", "").replace("쉬는날", "").strip()
+                    if not summary.endswith("대체공휴일"): summary += " 대체공휴일"
+                
+                is_red = self.utils.is_red_holiday(summary)
+                hol_c = "#ff6b6b" if is_red else self.lunar_color
+                tk.Label(f, text=summary, font=(self.font_family, max(7, self.font_size-3)), fg=hol_c, bg=current_cell_bg).pack(anchor="w", padx=5)
 
             evts = [e for e in self.events_data if target_date in e.get('start', {}).get('dateTime', e.get('start', {}).get('date', ''))]
             evts = self.sort_events(evts)
@@ -305,6 +317,11 @@ class GridCalendarApp:
                 
                 for h in all_hols: 
                     summary = h.get('summary', '')
+                    # '대체' 또는 '쉬는날'이 포함된 경우 '대체공휴일'로 변환
+                    if "대체" in summary or "쉬는날" in summary:
+                        summary = summary.replace("공휴일", "").replace("쉬는날", "").strip()
+                        if not summary.endswith("대체공휴일"): summary += " 대체공휴일"
+                    
                     is_red = self.utils.is_red_holiday(summary)
                     hol_c = "#ff6b6b" if is_red else self.lunar_color
                     tk.Label(f, text=summary, font=(self.font_family, max(7, self.font_size-3)), fg=hol_c, bg=current_cell_bg).pack(anchor="w", padx=5)
@@ -569,6 +586,39 @@ class GridCalendarApp:
         self.current_month=1 if self.current_month==12 else self.current_month+1
         self.current_year+=(1 if self.current_month==1 else 0)
         self.update_calendar()
+
+    def open_jump_popup(self):
+        jump_win = tk.Toplevel(self.root)
+        jump_win.title("날짜 이동")
+        jump_win.geometry("250x150")
+        jump_win.attributes("-topmost", True)
+        jump_win.configure(bg=self.bg_color, padx=20, pady=20)
+        
+        f = tk.Frame(jump_win, bg=self.bg_color)
+        f.pack(pady=10)
+        
+        y_ent = tk.Entry(f, width=6, font=(self.font_family, 12)); y_ent.pack(side="left", padx=2)
+        y_ent.insert(0, str(self.current_year))
+        tk.Label(f, text="년", bg=self.bg_color, fg=self.fg_color).pack(side="left", padx=2)
+        
+        m_ent = tk.Entry(f, width=4, font=(self.font_family, 12)); m_ent.pack(side="left", padx=2)
+        m_ent.insert(0, str(self.current_month))
+        tk.Label(f, text="월", bg=self.bg_color, fg=self.fg_color).pack(side="left", padx=2)
+        
+        def do_jump():
+            try:
+                y, m = int(y_ent.get()), int(m_ent.get())
+                if 1900 <= y <= 2100 and 1 <= m <= 12:
+                    self.current_year, self.current_month = y, m
+                    self.current_date = datetime.date(y, m, 1)
+                    self.update_calendar()
+                    jump_win.destroy()
+                else: raise ValueError
+            except: messagebox.showerror("오류", "올바른 연도(1900-2100)와 월(1-12)을 입력하세요.")
+
+        tk.Button(jump_win, text="이동", command=do_jump, bg="#1a73e8", fg="white", padx=20).pack(pady=10)
+        y_ent.focus_set()
+        jump_win.bind("<Return>", lambda e: do_jump())
 
     def open_settings(self): 
         if self.settings_win_instance and self.settings_win_instance.win.winfo_exists():

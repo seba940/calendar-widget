@@ -26,5 +26,11 @@ class CalendarUtils:
 
     @staticmethod
     def is_red_holiday(summary):
-        not_red_kw = ["어버이날", "스승의날", "제헌절", "식목일", "국군의 날", "대보름", "단오", "유두", "칠석", "동지", "노동절", "근로자의 날", "발렌타인데이", "화이트데이"]
-        return not any(kw in summary for kw in not_red_kw)
+        not_red_kw = [
+            "어버이날", "스승의날", "제헌절", "식목일", "국군의 날", "대보름", "단오", "유두", "칠석", "동지", 
+            "발렌타인데이", "화이트데이", "블랙데이", "빼빼로데이", "핼러윈", "할로윈",
+            "크리스마스 이브", "Christmas Eve", "New Year's Eve", "New Year's Day", 
+            "하지", "동지", "입춘", "우수", "경칩", "춘분", "청명", "곡우", "입하", "소만", "망종", 
+            "소서", "대서", "입추", "처서", "백로", "추분", "한로", "상강", "입동", "소설", "대설"
+        ]
+        return not any(kw.lower() in summary.lower() for kw in not_red_kw)
