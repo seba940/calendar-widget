@@ -121,6 +121,8 @@ class GridCalendarApp:
         
         tk.Button(btn_f, text="오늘", command=self.go_today, bg="#1a73e8", fg="white", bd=0, font=(self.font_family, 9, "bold"), padx=10).pack(side="left", padx=2)
         
+        tk.Button(btn_f, text="🔄 새로고침", command=self.manual_refresh, bg="#2d3436", fg="white", bd=0, font=(self.font_family, 9, "bold"), padx=10).pack(side="left", padx=2)
+        
         self.view_btn = tk.Button(btn_f, text="주간 보기" if self.view_mode=="monthly" else "월간 보기", command=self.toggle_view_mode, bg="#444", fg="white", bd=0, font=(self.font_family, 9), padx=10)
         self.view_btn.pack(side="left", padx=2)
         
