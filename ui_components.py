@@ -1,7 +1,33 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, font as tkfont
+from tkinter import ttk, messagebox, font as tkfont, colorchooser
 import webbrowser
 import datetime
+import re
+import urllib.parse
+import os
+import sys
+import subprocess
+import map_utils
+
+# 타 모듈에서 클래스 가져오기
+from ui_map_components import LocationSearchPopup
+from ui_popups import SettingsWindow, AgendaWindow
+
+try:
+    from tkintermapview import TkinterMapView
+    MAP_AVAILABLE = True
+except ImportError:
+    MAP_AVAILABLE = False
+
+# 구글 캘린더 기본 색상 팔레트 (colors().get() API 호출 전이거나 실패했을 때의 대체값)
+DEFAULT_EVENT_COLORS = {
+    "1": {"background": "#7986cb"}, "2": {"background": "#33b679"},
+    "3": {"background": "#8e24aa"}, "4": {"background": "#e67c73"},
+    "5": {"background": "#f6c026"}, "6": {"background": "#f5511d"},
+    "7": {"background": "#039be5"}, "8": {"background": "#616161"},
+    "9": {"background": "#3f51b5"}, "10": {"background": "#0b8043"},
+    "11": {"background": "#d60000"},
+}
 
 class UIComponents:
     @staticmethod
@@ -66,7 +92,7 @@ class DetailWindow:
     def __init__(self, parent, year, month, day, hols, evts, app_instance):
         self.app = app_instance
         self.win = tk.Toplevel(parent)
-        self.win.geometry("380x480")
+        self.win.geometry("380x560")
         self.win.attributes("-topmost", True)
         self.win.title("상세")
         self.win.configure(bg=self.app.bg_color, padx=20, pady=20)
@@ -90,9 +116,31 @@ class DetailWindow:
         
         tk.Button(nav_frame, text="▶", command=lambda: self.app.navigate_day(self.date_str, 1, False), bg=self.app.bg_color, fg=self.app.fg_color, bd=0, font=("Arial", 12), cursor="hand2").pack(side="left", padx=(0, 5))
         tk.Button(nav_frame, text="⏩", command=lambda: self.app.navigate_day(self.date_str, 1, True), bg=self.app.bg_color, fg=self.app.fg_color, bd=0, font=("Arial", 12), cursor="hand2").pack(side="left")
-        
-        detail_frame = tk.Frame(self.win, bg=self.app.bg_color); detail_frame.pack(fill="both", expand=True)
-        
+
+        # 하단 버튼을 먼저 배치해서 항상 보이도록 고정 (일정이 많아 내용이 길어져도 안 가려짐)
+        bottom_btns = tk.Frame(self.win, bg=self.app.bg_color)
+        bottom_btns.pack(side="bottom", fill="x", pady=(10, 0))
+        tk.Button(bottom_btns, text="+ 새로운 일정 추가하기", command=lambda: self.app.add_event_popup_with_win(self.date_str, self.win), bg="#1a73e8", fg="white", font=(self.app.font_family, 10, "bold")).pack(fill="x", pady=(0, 5))
+        tk.Button(bottom_btns, text="닫기", command=self.win.destroy).pack(fill="x")
+
+        # 일정 목록은 스크롤 가능한 영역에 배치 (일정이 많거나 길어도 마우스 휠로 접근 가능)
+        body_container = tk.Frame(self.win, bg=self.app.bg_color)
+        body_container.pack(side="top", fill="both", expand=True)
+        canvas = tk.Canvas(body_container, bg=self.app.bg_color, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(body_container, orient="vertical", command=canvas.yview)
+        detail_frame = tk.Frame(canvas, bg=self.app.bg_color)
+        detail_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas_window = canvas.create_window((0, 0), window=detail_frame, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(canvas_window, width=e.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def _on_mousewheel(e):
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        self.win.bind("<Destroy>", lambda e: canvas.unbind_all("<MouseWheel>") if e.widget == self.win else None)
+
         for h in self.hols: 
             summary = h.get('summary', '')
             is_red = self.app.utils.is_red_holiday(summary)
@@ -119,22 +167,53 @@ class DetailWindow:
             color = "#888888" if is_done else self.app.fg_color
 
             tk.Button(e_frame, text="V", command=lambda evt=e: self.app.toggle_complete(evt), bg="#444", fg="white", bd=0, width=2, cursor="hand2").pack(side="left", padx=2)
-            
-            # 요약과 메모를 함께 표시
-            info_frame = tk.Frame(e_frame, bg=self.app.bg_color)
-            info_frame.pack(side="left", fill="x", expand=True)
-            
-            tk.Label(info_frame, text=f"• {summary_text} ({t})", fg=color, bg=self.app.bg_color, anchor="w", font=evt_font).pack(side="top", fill="x")
-            
-            memo = e.get('description', '')
-            if memo:
-                tk.Label(info_frame, text=f"  ㄴ {memo}", fg=self.app.lunar_color, bg=self.app.bg_color, anchor="w", font=(self.app.font_family, 8)).pack(side="top", fill="x")
 
+            # 수정/삭제 버튼을 먼저 배치해서 오른쪽 공간을 확보 (내용 라벨이 expand=True라 나중에 넣으면 버튼이 밀려서 안 보임)
             tk.Button(e_frame, text="삭제", command=lambda evt_id=e['id'], evt=e: self.app.delete_event_with_win(evt_id, self.win, evt), bg="#ff4757", fg="white", bd=0, font=(self.app.font_family, 9), cursor="hand2").pack(side="right", padx=(2, 0))
             tk.Button(e_frame, text="수정", command=lambda evt=e: self.app.edit_event_popup_with_win(evt, self.date_str, self.win), bg="#555555", fg="white", bd=0, font=(self.app.font_family, 9), cursor="hand2").pack(side="right")
-        
-        tk.Button(self.win, text="+ 새로운 일정 추가하기", command=lambda: self.app.add_event_popup_with_win(self.date_str, self.win), bg="#1a73e8", fg="white", font=(self.app.font_family, 10, "bold")).pack(fill="x", pady=10)
-        tk.Button(self.win, text="닫기", command=self.win.destroy).pack(fill="x")
+
+            info_frame = tk.Frame(e_frame, bg=self.app.bg_color)
+            info_frame.pack(side="left", fill="x", expand=True)
+
+            tk.Label(info_frame, text=f"• {summary_text} ({t})", fg=color, bg=self.app.bg_color, anchor="w", justify="left", wraplength=200, font=evt_font).pack(side="top", fill="x")
+
+            memo = e.get('description', '')
+            if memo:
+                tk.Label(info_frame, text=f"  ㄴ {memo}", fg=self.app.lunar_color, bg=self.app.bg_color, anchor="w", justify="left", wraplength=200, font=(self.app.font_family, 8)).pack(side="top", fill="x")
+
+            location = e.get('location', '')
+            if location:
+                map_url = f"https://www.google.com/maps/search/{urllib.parse.quote(location)}"
+                loc_lbl = tk.Label(info_frame, text=f"  📍 {location}", fg="#4fc3f7", bg=self.app.bg_color, anchor="w", justify="left", wraplength=200, font=(self.app.font_family, 8), cursor="hand2")
+                loc_lbl.pack(side="top", fill="x")
+                loc_lbl.bind("<Button-1>", lambda ev, url=map_url: webbrowser.open(url))
+                if MAP_AVAILABLE:
+                    map_container = tk.Frame(detail_frame, bg=self.app.bg_color, height=160)
+                    map_container.pack(fill="x", pady=(2, 6))
+                    map_container.pack_propagate(False)
+                    m = TkinterMapView(map_container, width=340, height=155, corner_radius=6)
+                    m.pack(fill="both", expand=True)
+                    m.bind("<Button-1>", lambda ev, url=map_url: webbrowser.open(url))
+                    self.win.after(400, lambda addr=location, mw=m: self._load_detail_map(mw, addr))
+
+    def _load_detail_map(self, map_widget, address):
+        try:
+            # 1. 먼저 Photon API 기반 지오코딩 시도 (한국 POI 및 상호명 검색에 더 강함)
+            lat, lng, name = map_utils.geocode(address)
+            if lat:
+                map_widget.set_position(lat, lng)
+                map_widget.set_marker(lat, lng, text=name)
+                map_widget.set_zoom(15)
+                return
+
+            # 2. 실패 시 기본 set_address (Nominatim) 시도
+            result = map_widget.set_address(address, marker=False)
+            if result:
+                pos = map_widget.get_position()
+                map_widget.set_marker(pos[0], pos[1], text=address)
+                map_widget.set_zoom(15)
+        except Exception:
+            pass
 
 class EventPopup:
     def __init__(self, parent, app, date_str, event=None):
@@ -143,15 +222,39 @@ class EventPopup:
         self.event = event
         self.win = tk.Toplevel(parent)
         self.win.title("일정 추가" if not event else "일정 수정")
-        self.win.geometry("450x700") # 높이 증가
+        self.win.geometry("480x760")
+        self.win.minsize(400, 320)
         self.win.attributes("-topmost", True)
-        self.win.configure(bg=app.bg_color, padx=30, pady=20)
-        
-        tk.Label(self.win, text="📅 일정 정보", font=(app.font_family, 14, "bold"), bg=app.bg_color, fg=app.fg_color).pack(pady=(0, 15))
+        self.win.configure(bg=app.bg_color)
 
-        # 날짜 설정
-        tk.Label(self.win, text="📅 날짜 설정", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
-        date_frame = tk.Frame(self.win, bg=app.bg_color)
+        # 저장/취소 버튼을 창 맨 아래에 먼저 고정 배치 (내용이 길어져도 항상 보이도록)
+        btn_frame = tk.Frame(self.win, bg=app.bg_color)
+        btn_frame.pack(side="bottom", fill="x", padx=20, pady=15)
+        tk.Button(btn_frame, text="💾 저장하기", command=self.save_event, bg="#1a73e8", fg="white", font=(app.font_family, 10, "bold"), pady=8).pack(side="left", expand=True, fill="x", padx=(0, 5))
+        tk.Button(btn_frame, text="❌ 취소", command=self.win.destroy, bg="#555555", fg="white", font=(app.font_family, 10), pady=8).pack(side="left", expand=True, fill="x", padx=(5, 0))
+
+        # 본문은 스크롤 가능한 영역에 배치 (내용이 창보다 길어도 마우스 휠로 스크롤해서 접근 가능)
+        body_container = tk.Frame(self.win, bg=app.bg_color)
+        body_container.pack(side="top", fill="both", expand=True)
+        canvas = tk.Canvas(body_container, bg=app.bg_color, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(body_container, orient="vertical", command=canvas.yview)
+        content = tk.Frame(canvas, bg=app.bg_color)
+        content.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas_window = canvas.create_window((0, 0), window=content, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(canvas_window, width=e.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True, padx=(20, 0), pady=(20, 0))
+        scrollbar.pack(side="right", fill="y", pady=(20, 0))
+
+        def _on_mousewheel(e):
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        self.win.bind("<Destroy>", lambda e: canvas.unbind_all("<MouseWheel>") if e.widget == self.win else None)
+
+        tk.Label(content, text="📅 일정 정보", font=(app.font_family, 14, "bold"), bg=app.bg_color, fg=app.fg_color).pack(pady=(0, 15))
+
+        tk.Label(content, text="📅 날짜 설정", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        date_frame = tk.Frame(content, bg=app.bg_color)
         date_frame.pack(fill="x", pady=(5, 10))
 
         curr_year = datetime.datetime.now().year
@@ -167,21 +270,70 @@ class EventPopup:
         self.day_cb.pack(side="left")
         tk.Label(date_frame, text="일", bg=app.bg_color, fg=app.fg_color).pack(side="left", padx=(2, 5))
 
-        # 날짜 초기값 설정
         y, m, d = map(int, date_str.split('-'))
         self.year_cb.set(str(y))
         self.month_cb.set(f"{m:02d}")
         self.day_cb.set(f"{d:02d}")
 
-        # 제목
-        tk.Label(self.win, text="📝 제목", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
-        self.summary_ent = tk.Entry(self.win, font=(app.font_family, 10))
+        tk.Label(content, text="📝 제목", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        self.summary_ent = tk.Entry(content, font=(app.font_family, 10))
         self.summary_ent.pack(fill="x", pady=(5, 10))
         if event: self.summary_ent.insert(0, event.get('summary', ''))
-        
-        # 시간
-        tk.Label(self.win, text="⏰ 시간 설정", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
-        time_frame = tk.Frame(self.win, bg=app.bg_color)
+
+        # 카테고리 / 색상: 카테고리를 고르면 이전에 저장해둔 고유 색이 자동으로 선택됨
+        tk.Label(content, text="🏷 카테고리 / 색상", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        cat_frame = tk.Frame(content, bg=app.bg_color)
+        cat_frame.pack(fill="x", pady=(5, 5))
+        self.categories = self.app.config.settings.get("categories", {})
+        self.custom_colors = self.app.config.settings.get("custom_event_colors", {})  # event_id -> hex (앱 로컬 전용, 구글에 안 보냄)
+        self.category_var = tk.StringVar()
+        self.category_cb = ttk.Combobox(cat_frame, textvariable=self.category_var, values=list(self.categories.keys()))
+        self.category_cb.pack(side="left", fill="x", expand=True)
+        self.category_cb.bind("<<ComboboxSelected>>", self.on_category_selected)
+        self.category_cb.bind("<Return>", self.on_category_selected)
+        self.category_cb.bind("<FocusOut>", self.on_category_selected)
+
+        self.event_colors = self.app.api.event_colors if getattr(self.app.api, 'event_colors', None) else DEFAULT_EVENT_COLORS
+        self.custom_hex = self.custom_colors.get(event['id']) if event else None
+        self.selected_color_id = (event.get('colorId') if event else None) if not self.custom_hex else None
+        self.color_swatches = {}
+        swatch_frame = tk.Frame(content, bg=app.bg_color)
+        swatch_frame.pack(fill="x", pady=(5, 5))
+        for cid in sorted(self.event_colors.keys(), key=lambda x: int(x)):
+            sw = tk.Canvas(swatch_frame, width=22, height=22, bg=app.bg_color, highlightthickness=0, cursor="hand2")
+            sw.pack(side="left", padx=3)
+            self.color_swatches[cid] = sw
+            sw.bind("<Button-1>", lambda e, c=cid: self.select_color(c))
+
+        # 사용자 지정 색상 (RGB/HEX 직접 입력, 이 앱에서만 적용되고 구글 캘린더로는 저장되지 않음)
+        custom_frame = tk.Frame(content, bg=app.bg_color)
+        custom_frame.pack(fill="x", pady=(0, 5))
+        tk.Label(custom_frame, text="사용자 지정:", font=(app.font_family, 9), bg=app.bg_color, fg=app.fg_color).pack(side="left")
+        self.custom_preview = tk.Canvas(custom_frame, width=22, height=22, bg=app.bg_color, highlightthickness=0)
+        self.custom_preview.pack(side="left", padx=(6, 4))
+        self.hex_ent = tk.Entry(custom_frame, font=(app.font_family, 10), width=9)
+        self.hex_ent.pack(side="left")
+        self.hex_ent.insert(0, self.custom_hex or "#RRGGBB")
+        self.hex_ent.bind("<Return>", lambda e: self._apply_hex_entry())
+        self.hex_ent.bind("<FocusOut>", lambda e: self._apply_hex_entry())
+        tk.Button(custom_frame, text="🎨 색상 선택", command=self.open_color_chooser,
+                  bg="#555555", fg="white", font=(app.font_family, 9), cursor="hand2").pack(side="left", padx=(6, 0))
+        tk.Label(content, text="(RGB/HEX 값을 직접 입력하거나 색상 선택 버튼으로 고를 수 있고, 이 색은 구글 캘린더와 동기화되지 않고 이 프로그램에만 저장됩니다)",
+                 font=(app.font_family, 8), bg=app.bg_color, fg="#888888", wraplength=380, justify="left").pack(anchor="w", pady=(0, 10))
+
+        self._redraw_swatches()
+        self._redraw_custom_preview()
+
+        if event and event.get('summary') and not self.custom_hex:
+            # 기존 일정의 제목과 정확히 일치하는 카테고리가 있으면 자동으로 표시
+            for name in self.categories:
+                if name and name in event.get('summary', ''):
+                    self.category_var.set(name)
+                    self.on_category_selected()
+                    break
+
+        tk.Label(content, text="⏰ 시간 설정", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        time_frame = tk.Frame(content, bg=app.bg_color)
         time_frame.pack(fill="x", pady=(5, 10))
 
         self.all_day_var = tk.BooleanVar()
@@ -203,11 +355,9 @@ class EventPopup:
         self.end_min_cb = ttk.Combobox(time_frame, values=[f"{m:02d}" for m in range(0, 60, 5)], width=4, state="readonly")
         self.end_min_cb.pack(side="left", padx=(2, 5))
 
-        # 초기값 설정
         if event:
             start_t = event['start'].get('dateTime', '종일')
             end_t = event['end'].get('dateTime', '종일')
-            
             if 'T' in start_t:
                 self.all_day_var.set(False)
                 self.hour_cb.set(start_t[11:13])
@@ -233,17 +383,41 @@ class EventPopup:
         
         self.toggle_time_fields()
 
-        # 메모 (Description)
-        tk.Label(self.win, text="🗒 메모", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
-        self.memo_ent = tk.Text(self.win, font=(app.font_family, 10), height=4, insertbackground=app.fg_color, insertwidth=2)
+        tk.Label(content, text="🗒 메모", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        self.memo_ent = tk.Text(content, font=(app.font_family, 10), height=4, insertbackground=app.fg_color, insertwidth=2)
         self.memo_ent.pack(fill="x", pady=(5, 10))
         if event and event.get('description'):
             self.memo_ent.insert("1.0", event.get('description'))
 
-        # 반복 설정
-        tk.Label(self.win, text="🔄 반복 설정", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        tk.Label(content, text="📍 장소", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
+        loc_input_frame = tk.Frame(content, bg=app.bg_color)
+        loc_input_frame.pack(fill="x", pady=(5, 5))
+        self.location_ent = tk.Entry(loc_input_frame, font=(app.font_family, 10))
+        self.location_ent.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        tk.Button(loc_input_frame, text="🔍 장소 검색", command=self.open_location_search,
+                  bg="#34a853", fg="white", font=(app.font_family, 9), pady=3, cursor="hand2").pack(side="left")
+
+        map_bg = "#1e1e2e" if app.theme == "black" else "#ebebeb"
+        self.map_preview_frame = tk.Frame(content, bg=map_bg, height=190)
+        self.map_preview_frame.pack(fill="x", pady=(0, 10))
+        self.map_preview_frame.pack_propagate(False)
+        self.map_placeholder = tk.Label(self.map_preview_frame,
+                                         text="🗺  장소를 검색하면 지도가 표시됩니다",
+                                         fg="#666", bg=map_bg, font=(app.font_family, 10))
+        self.map_placeholder.pack(expand=True)
+        self.map_widget = None
+        self.location_lat = None
+        self.location_lng = None
+        self._preview_marker = None
+
+        if event and event.get('location'):
+            self.location_ent.insert(0, event.get('location'))
+            if MAP_AVAILABLE:
+                self.win.after(600, lambda: self._load_existing_location(event.get('location')))
+
+        tk.Label(content, text="🔄 반복 설정", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
         self.repeat_var = tk.StringVar(value="NONE")
-        repeat_frame = tk.Frame(self.win, bg=app.bg_color)
+        repeat_frame = tk.Frame(content, bg=app.bg_color)
         repeat_frame.pack(fill="x", pady=(5, 10))
         
         repeats = [("없음", "NONE"), ("매일", "DAILY"), ("매월", "MONTHLY"), ("매년", "YEARLY")]
@@ -256,11 +430,10 @@ class EventPopup:
             elif "MONTHLY" in rrule: self.repeat_var.set("MONTHLY")
             elif "YEARLY" in rrule: self.repeat_var.set("YEARLY")
 
-        # 반복 종료일
-        self.end_date_label = tk.Label(self.win, text="📅 반복 종료일", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color)
+        self.end_date_label = tk.Label(content, text="📅 반복 종료일", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color)
         self.end_date_label.pack(anchor="w")
-        
-        self.end_date_frame = tk.Frame(self.win, bg=app.bg_color)
+
+        self.end_date_frame = tk.Frame(content, bg=app.bg_color)
         self.end_date_frame.pack(fill="x", pady=(5, 15))
 
         curr_year = datetime.datetime.now().year
@@ -276,7 +449,6 @@ class EventPopup:
         self.end_day_cb.pack(side="left")
         tk.Label(self.end_date_frame, text="일", bg=app.bg_color, fg=app.fg_color).pack(side="left", padx=(2, 5))
 
-        # 반복 종료일 초기값
         self.end_year_cb.set(str(curr_year))
         self.end_month_cb.set(datetime.datetime.now().strftime("%m"))
         self.end_day_cb.set(datetime.datetime.now().strftime("%d"))
@@ -291,11 +463,86 @@ class EventPopup:
 
         self.toggle_repeat_fields()
 
-        btn_frame = tk.Frame(self.win, bg=app.bg_color)
-        btn_frame.pack(fill="x", pady=(10, 0))
+    def _redraw_swatches(self):
+        for cid, sw in self.color_swatches.items():
+            sw.delete("all")
+            bg_hex = self.event_colors[cid].get('background', '#888888')
+            is_sel = (cid == self.selected_color_id and not self.custom_hex)
+            outline = self.app.fg_color if is_sel else bg_hex
+            width = 3 if is_sel else 0
+            sw.create_oval(2, 2, 20, 20, fill=bg_hex, outline=outline, width=width)
 
-        tk.Button(btn_frame, text="💾 저장하기", command=self.save_event, bg="#1a73e8", fg="white", font=(app.font_family, 10, "bold"), pady=8).pack(side="left", expand=True, fill="x", padx=(0, 5))
-        tk.Button(btn_frame, text="❌ 취소", command=self.win.destroy, bg="#555555", fg="white", font=(app.font_family, 10), pady=8).pack(side="left", expand=True, fill="x", padx=(5, 0))
+    def _redraw_custom_preview(self):
+        self.custom_preview.delete("all")
+        if self.custom_hex:
+            self.custom_preview.create_oval(2, 2, 20, 20, fill=self.custom_hex, outline=self.app.fg_color, width=2)
+        else:
+            self.custom_preview.create_oval(2, 2, 20, 20, fill=self.app.bg_color, outline="#888888", width=1)
+
+    def select_color(self, color_id):
+        self.selected_color_id = color_id
+        self.custom_hex = None
+        self.hex_ent.delete(0, "end")
+        self.hex_ent.insert(0, "#RRGGBB")
+        self._redraw_swatches()
+        self._redraw_custom_preview()
+        # 카테고리 이름이 입력돼 있으면 이 색을 그 카테고리의 고유 색으로 저장 (구글 표준색 -> 동기화됨)
+        cat_name = self.category_var.get().strip()
+        if cat_name:
+            self.categories[cat_name] = {"colorId": color_id}
+            if cat_name not in self.category_cb['values']:
+                self.category_cb['values'] = list(self.categories.keys())
+
+    def _normalize_hex(self, text):
+        text = text.strip()
+        if not text:
+            return None
+        if not text.startswith('#'):
+            text = '#' + text
+        if re.fullmatch(r'#[0-9A-Fa-f]{6}', text):
+            return text.lower()
+        return None
+
+    def apply_custom_hex(self, hex_code):
+        self.custom_hex = hex_code
+        self.selected_color_id = None
+        self.hex_ent.delete(0, "end")
+        self.hex_ent.insert(0, hex_code)
+        self._redraw_swatches()
+        self._redraw_custom_preview()
+        # 카테고리 이름이 입력돼 있으면 이 사용자 지정 색을 그 카테고리의 고유 색으로 저장 (로컬 전용, 구글엔 저장 안 됨)
+        cat_name = self.category_var.get().strip()
+        if cat_name:
+            self.categories[cat_name] = {"custom": hex_code}
+            if cat_name not in self.category_cb['values']:
+                self.category_cb['values'] = list(self.categories.keys())
+
+    def _apply_hex_entry(self):
+        hex_code = self._normalize_hex(self.hex_ent.get())
+        if hex_code:
+            self.apply_custom_hex(hex_code)
+        elif self.hex_ent.get().strip() not in ("", "#RRGGBB"):
+            messagebox.showwarning("입력 오류", "색상 코드는 #RRGGBB 형식(예: #3f51b5)으로 입력해 주세요.")
+
+    def open_color_chooser(self):
+        initial = self.custom_hex or "#3f51b5"
+        _, hex_code = colorchooser.askcolor(color=initial, title="사용자 지정 색상 선택", parent=self.win)
+        if hex_code:
+            self.apply_custom_hex(hex_code)
+
+    def on_category_selected(self, _event=None):
+        cat_name = self.category_var.get().strip()
+        if not cat_name or cat_name not in self.categories:
+            return
+        val = self.categories[cat_name]
+        if isinstance(val, dict):
+            if val.get('custom'):
+                self.apply_custom_hex(val['custom'])
+            elif val.get('colorId'):
+                self.select_color(val['colorId'])
+        else:
+            # 이전 버전 형식(구글 colorId 문자열) 호환
+            self.select_color(val)
 
     def toggle_time_fields(self):
         state = "disabled" if self.all_day_var.get() else "readonly"
@@ -305,30 +552,87 @@ class EventPopup:
         self.end_min_cb.config(state=state)
 
     def toggle_repeat_fields(self):
-        state = "normal" if self.repeat_var.get() != "NONE" else "disabled"
-        # Combobox는 readonly 상태에서도 값을 바꿀 수 있어야 하므로 state 제어가 까다로움. 
-        # 여기서는 프레임 내부 위젯들의 상태를 변경
         cb_state = "readonly" if self.repeat_var.get() != "NONE" else "disabled"
         self.end_year_cb.config(state=cb_state)
         self.end_month_cb.config(state=cb_state)
         self.end_day_cb.config(state=cb_state)
 
+    def open_location_search(self):
+        LocationSearchPopup(self.win, self.app, self.set_location)
+
+    def set_location(self, address, lat, lng):
+        self.location_ent.delete(0, "end")
+        self.location_ent.insert(0, address)
+        self.location_lat = lat
+        self.location_lng = lng
+        self._show_map_preview(lat, lng, address)
+
+    def _create_map_widget(self):
+        if self.map_placeholder:
+            self.map_placeholder.destroy()
+            self.map_placeholder = None
+        self.map_widget = TkinterMapView(self.map_preview_frame, width=390, height=185, corner_radius=6)
+        self.map_widget.pack(fill="both", expand=True)
+
+    def _show_map_preview(self, lat, lng, address=""):
+        if not MAP_AVAILABLE:
+            return
+        if not self.map_widget:
+            self._create_map_widget()
+        self.map_widget.set_position(lat, lng)
+        self.map_widget.set_zoom(15)
+        if self._preview_marker:
+            self._preview_marker.delete()
+        self._preview_marker = self.map_widget.set_marker(lat, lng, text=address)
+
+    def _load_existing_location(self, address):
+        if not MAP_AVAILABLE:
+            return
+        try:
+            if not self.map_widget:
+                self._create_map_widget()
+            
+            # 1. 기본 set_address 시도
+            result = self.map_widget.set_address(address, marker=False)
+            if result:
+                pos = self.map_widget.get_position()
+                self.location_lat, self.location_lng = pos[0], pos[1]
+                if self._preview_marker: self._preview_marker.delete()
+                self._preview_marker = self.map_widget.set_marker(pos[0], pos[1], text=address)
+                self.map_widget.set_zoom(15)
+                return
+            
+            # 2. 실패 시 Photon API 기반 지오코딩 시도
+            lat, lng, name = map_utils.geocode(address)
+            if lat:
+                self.location_lat, self.location_lng = lat, lng
+                if self._preview_marker: self._preview_marker.delete()
+                self._preview_marker = self.map_widget.set_marker(lat, lng, text=name)
+                self.map_widget.set_position(lat, lng)
+                self.map_widget.set_zoom(15)
+        except Exception:
+            pass
+
     def save_event(self):
         summary = self.summary_ent.get().strip()
         is_all_day = self.all_day_var.get()
         memo = self.memo_ent.get("1.0", "end-1c").strip()
+        location = self.location_ent.get().strip()
         repeat = self.repeat_var.get()
-        
-        # 선택된 날짜 가져오기
         selected_date = f"{self.year_cb.get()}-{self.month_cb.get()}-{self.day_cb.get()}"
-        
+
         if not summary:
             messagebox.showwarning("입력 누락", "일정 제목을 입력해 주세요.")
             return
 
-        body = {'summary': summary, 'description': memo, 'start': {}, 'end': {}}
-        
-        # 시간 처리
+        body = {'summary': summary, 'description': memo, 'location': location, 'start': {}, 'end': {}}
+        if self.custom_hex:
+            # 사용자 지정 색상은 로컬 전용: 구글에는 새로 보내지 않고, 기존에 있던 colorId만 그대로 유지
+            if self.event and self.event.get('colorId'):
+                body['colorId'] = self.event['colorId']
+        elif self.selected_color_id:
+            body['colorId'] = self.selected_color_id
+
         if is_all_day:
             start_dt = datetime.datetime.strptime(selected_date, "%Y-%m-%d")
             end_dt = start_dt + datetime.timedelta(days=1)
@@ -339,25 +643,20 @@ class EventPopup:
             end_time_str = f"{self.end_hour_cb.get()}:{self.end_min_cb.get()}"
             try:
                 start_dt_str = f"{selected_date}T{start_time_str}:00"
-                
-                # 종료 시간이 시작 시간보다 빠른 경우 다음날로 처리
                 if end_time_str <= start_time_str:
                     curr_dt = datetime.datetime.strptime(selected_date, "%Y-%m-%d")
                     next_dt = curr_dt + datetime.timedelta(days=1)
                     end_dt_str = f"{next_dt.strftime('%Y-%m-%d')}T{end_time_str}:00"
                 else:
                     end_dt_str = f"{selected_date}T{end_time_str}:00"
-
                 body['start'] = {'dateTime': start_dt_str, 'timeZone': 'Asia/Seoul'}
                 body['end'] = {'dateTime': end_dt_str, 'timeZone': 'Asia/Seoul'}
             except ValueError:
                 messagebox.showerror("오류", "시간 선택이 올바르지 않습니다.")
                 return
 
-        # 반복 처리
         if repeat != "NONE":
             rrule = f"RRULE:FREQ={repeat}"
-            # 종료일 조합
             end_date_str = f"{self.end_year_cb.get()}{self.end_month_cb.get()}{self.end_day_cb.get()}"
             rrule += f";UNTIL={end_date_str}T235959Z"
             body['recurrence'] = [rrule]
@@ -365,192 +664,25 @@ class EventPopup:
         try:
             if self.event:
                 self.app.api.update_event(self.event['id'], body)
+                result_id = self.event['id']
             else:
-                self.app.api.insert_event(body)
-            
+                result = self.app.api.insert_event(body)
+                result_id = result.get('id') if result else None
+
+            # 사용자 지정 색상은 이 프로그램의 설정 파일에만 저장 (구글 캘린더로는 전송되지 않음)
+            if result_id:
+                if self.custom_hex:
+                    self.custom_colors[result_id] = self.custom_hex
+                    self.app.config.save_settings({"custom_event_colors": self.custom_colors})
+                elif result_id in self.custom_colors:
+                    del self.custom_colors[result_id]
+                    self.app.config.save_settings({"custom_event_colors": self.custom_colors})
+
+            cat_name = self.category_var.get().strip()
+            if cat_name and (self.selected_color_id or self.custom_hex):
+                self.app.config.save_settings({"categories": self.categories})
+
             self.win.destroy()
             self.app.manual_refresh()
         except Exception as e:
             messagebox.showerror("오류", f"일정 저장 중 오류 발생: {e}")
-
-class SettingsWindow:
-    def __init__(self, parent, app):
-        self.app = app
-        self.win = tk.Toplevel(parent)
-        self.win.title("설정")
-        self.win.geometry("400x500")
-        self.win.attributes("-topmost", True)
-        self.win.configure(bg=app.bg_color, padx=30, pady=30)
-        
-        tk.Label(self.win, text="⚙️ 프로그램 설정", font=(app.font_family, 14, "bold"), bg=app.bg_color, fg=app.fg_color).pack(pady=(0, 20))
-
-        # 테마 설정
-        tk.Label(self.win, text="🎨 테마", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
-        self.theme_var = tk.StringVar(value=app.theme)
-        theme_frame = tk.Frame(self.win, bg=app.bg_color)
-        theme_frame.pack(fill="x", pady=(5, 15))
-        tk.Radiobutton(theme_frame, text="Black", variable=self.theme_var, value="black", bg=app.bg_color, fg=app.fg_color, selectcolor="#444").pack(side="left")
-        tk.Radiobutton(theme_frame, text="White", variable=self.theme_var, value="white", bg=app.bg_color, fg=app.fg_color, selectcolor="#ddd").pack(side="left", padx=10)
-
-        # 투명도 설정
-        tk.Label(self.win, text="🌓 투명도", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
-        self.alpha_scale = tk.Scale(self.win, from_=0.1, to=1.0, resolution=0.05, orient="horizontal", bg=app.bg_color, fg=app.fg_color, highlightthickness=0)
-        self.alpha_scale.set(app.alpha_val)
-        self.alpha_scale.pack(fill="x", pady=(5, 15))
-
-        # 폰트 설정
-        tk.Label(self.win, text="🔡 폰트 (예: Malgun Gothic)", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
-        self.font_ent = tk.Entry(self.win, font=(app.font_family, 10))
-        self.font_ent.pack(fill="x", pady=(5, 15))
-        self.font_ent.insert(0, app.font_family)
-
-        # 폰트 크기 설정
-        tk.Label(self.win, text="📏 폰트 크기", font=(app.font_family, 10, "bold"), bg=app.bg_color, fg=app.fg_color).pack(anchor="w")
-        self.size_ent = tk.Entry(self.win, font=(app.font_family, 10))
-        self.size_ent.pack(fill="x", pady=(5, 20))
-        self.size_ent.insert(0, str(app.font_size))
-
-        btn_frame = tk.Frame(self.win, bg=app.bg_color)
-        btn_frame.pack(fill="x", pady=(10, 0))
-
-        tk.Button(btn_frame, text="✅ 적용 및 저장", command=self.save_settings, bg="#1a73e8", fg="white", font=(app.font_family, 10, "bold"), pady=8).pack(side="left", expand=True, fill="x", padx=(0, 5))
-        tk.Button(btn_frame, text="❌ 취소", command=self.win.destroy, bg="#555555", fg="white", font=(app.font_family, 10), pady=8).pack(side="left", expand=True, fill="x", padx=(5, 0))
-
-    def save_settings(self):
-        try:
-            new_theme = self.theme_var.get()
-            new_alpha = float(self.alpha_scale.get())
-            new_font = self.font_ent.get().strip()
-            new_size = int(self.size_ent.get().strip())
-
-            self.app.theme = new_theme
-            self.app.alpha_val = new_alpha
-            self.app.font_family = new_font
-            self.app.font_size = new_size
-
-            self.app.set_theme_colors(new_theme)
-            self.app.root.attributes("-alpha", new_alpha)
-            self.app.root.configure(bg=self.app.bg_color)
-            
-            self.app.save_settings()
-            self.app.setup_ui()
-            self.app.manual_refresh()
-            
-            messagebox.showinfo("알림", "설정이 저장되었습니다.")
-            self.win.destroy()
-        except Exception as e:
-            messagebox.showerror("오류", f"설정 저장 중 오류 발생: {e}")
-
-class AgendaWindow:
-    def __init__(self, parent, app):
-        self.app = app
-        self.win = tk.Toplevel(parent)
-        self.win.title("일정 검색 및 목록")
-        self.win.geometry("500x600")
-        self.win.attributes("-topmost", True)
-        self.win.configure(bg=app.bg_color, padx=20, pady=20)
-        
-        tk.Label(self.win, text="🔍 일정 검색 및 목록", font=(app.font_family, 16, "bold"), bg=app.bg_color, fg=app.fg_color).pack(pady=(0, 15))
-
-        # 검색창
-        search_frame = tk.Frame(self.win, bg=app.bg_color)
-        search_frame.pack(fill="x", pady=(0, 15))
-        
-        self.search_ent = tk.Entry(search_frame, font=(app.font_family, 11))
-        self.search_ent.pack(side="left", fill="x", expand=True, padx=(0, 5))
-        self.search_ent.bind("<Return>", lambda e: self.search())
-        
-        tk.Button(search_frame, text="검색", command=self.search, bg="#1a73e8", fg="white", font=(app.font_family, 10, "bold"), padx=10).pack(side="left")
-
-        # 결과 리스트 (스크롤 가능)
-        list_container = tk.Frame(self.win, bg=app.bg_color)
-        list_container.pack(fill="both", expand=True)
-        
-        self.canvas = tk.Canvas(list_container, bg=app.bg_color, highlightthickness=0)
-        self.scrollbar = ttk.Scrollbar(list_container, orient="vertical", command=self.canvas.yview)
-        self.scrollable_frame = tk.Frame(self.canvas, bg=app.bg_color)
-
-        self.scrollable_frame.bind(
-            "<Configure>",
-            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        )
-
-        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw", width=440)
-        self.canvas.configure(yscrollcommand=self.scrollbar.set)
-
-        self.canvas.pack(side="left", fill="both", expand=True)
-        self.scrollbar.pack(side="right", fill="y")
-
-        # 마우스 휠 스크롤 지원
-        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
-
-        self.refresh_upcoming()
-
-    def _on_mousewheel(self, event):
-        self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-
-    def refresh_upcoming(self):
-        self.clear_list()
-        tk.Label(self.scrollable_frame, text="⏳ 다가오는 일정 불러오는 중...", fg=self.app.fg_color, bg=self.app.bg_color).pack(pady=20)
-        self.win.after(100, self._fetch_upcoming)
-
-    def _fetch_upcoming(self):
-        evts = self.app.api.fetch_upcoming_events(max_results=30)
-        self.display_results(evts, "📅 다가오는 일정")
-
-    def search(self):
-        query = self.search_ent.get().strip()
-        if not query:
-            self.refresh_upcoming()
-            return
-        
-        self.clear_list()
-        tk.Label(self.scrollable_frame, text=f"🔍 '{query}' 검색 중...", fg=self.app.fg_color, bg=self.app.bg_color).pack(pady=20)
-        self.win.after(100, lambda: self._do_search(query))
-
-    def _do_search(self, query):
-        evts = self.app.api.search_events(query)
-        self.display_results(evts, f"🔍 '{query}' 검색 결과")
-
-    def clear_list(self):
-        for w in self.scrollable_frame.winfo_children(): w.destroy()
-
-    def display_results(self, evts, title):
-        self.clear_list()
-        tk.Label(self.scrollable_frame, text=title, font=(self.app.font_family, 12, "bold"), fg=self.app.fg_color, bg=self.app.bg_color).pack(anchor="w", pady=(0, 10))
-        
-        if not evts:
-            tk.Label(self.scrollable_frame, text="일정이 없습니다.", fg="#888", bg=self.app.bg_color).pack(pady=20)
-            return
-
-        for e in evts:
-            e_frame = tk.Frame(self.scrollable_frame, bg="#333" if self.app.theme=="black" else "#f0f0f0", padx=10, pady=10)
-            e_frame.pack(fill="x", pady=5)
-            
-            # 날짜 표시
-            start = e['start'].get('dateTime', e['start'].get('date', ''))
-            date_part = start[:10]
-            time_part = start[11:16] if 'T' in start else "종일"
-            
-            tk.Label(e_frame, text=f"{date_part} ({time_part})", font=(self.app.font_family, 9), fg=self.app.lunar_color, bg=e_frame["bg"]).pack(anchor="w")
-            
-            summary = e.get('summary', '무제')
-            tk.Label(e_frame, text=summary, font=(self.app.font_family, 11, "bold"), fg=self.app.fg_color, bg=e_frame["bg"]).pack(anchor="w")
-            
-            desc = e.get('description', '')
-            if desc:
-                tk.Label(e_frame, text=desc, font=(self.app.font_family, 9), fg="#aaa", bg=e_frame["bg"], wraplength=400, justify="left").pack(anchor="w")
-
-            # 클릭 시 해당 날짜로 이동 및 상세 창 열기 기능 (선택 사항)
-            e_frame.bind("<Button-1>", lambda event, d=date_part: self.go_to_date(d))
-            for child in e_frame.winfo_children():
-                child.bind("<Button-1>", lambda event, d=date_part: self.go_to_date(d))
-
-    def go_to_date(self, date_str):
-        # YYYY-MM-DD 형식
-        y, m, d = map(int, date_str.split('-'))
-        self.app.current_year = y
-        self.app.current_month = m
-        self.app.update_calendar()
-        # 해당 날짜 상세 창 열기 (필요시)
-        # self.win.destroy()

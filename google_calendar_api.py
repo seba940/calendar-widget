@@ -24,10 +24,13 @@ class GoogleCalendarAPI:
             
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
-                try: 
+                try:
                     creds.refresh(Request())
-                except Exception:
-                    if os.path.exists('token.json'): os.remove('token.json')
+                except Exception as ex:
+                    # 토큰이 완전히 취소된 경우만 삭제, 네트워크 오류는 삭제 안 함
+                    err = str(ex).lower()
+                    if 'invalid_grant' in err or 'token has been expired or revoked' in err:
+                        if os.path.exists('token.json'): os.remove('token.json')
                     creds = None
             
             if not creds:
@@ -89,26 +92,67 @@ class GoogleCalendarAPI:
         color_info = self.event_colors.get(color_id, {})
         return color_info.get('background', '#1a73e8') # 기본값 구글 블루
 
+    def _rebuild_service(self, creds):
+        """자격증명으로 서비스 객체 재빌드"""
+        http_client = httplib2.Http(disable_ssl_certificate_validation=True)
+        authed_http = AuthorizedHttp(creds, http=http_client)
+        self.service = build('calendar', 'v3', http=authed_http, static_discovery=False)
+
+    def _silent_refresh(self):
+        """브라우저 없이 토큰만 조용히 갱신. 성공하면 True, 실패하면 False."""
+        try:
+            if not os.path.exists('token.json'):
+                return False
+            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+            if not creds:
+                return False
+            if creds.valid:
+                self._rebuild_service(creds)
+                return True
+            if creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+                with open('token.json', 'w', encoding='utf-8') as f:
+                    f.write(creds.to_json())
+                self._rebuild_service(creds)
+                return True
+        except Exception:
+            pass
+        return False
+
     def fetch_events(self, year, month):
-        if not self.service: return [], []
-        
+        # 서비스가 없으면 조용한 토큰 갱신 시도 (브라우저 없음)
+        if not self.service:
+            if not self._silent_refresh():
+                return None, None  # 완전 실패 → 기존 데이터 유지
+
         s = f"{year}-{month:02d}-01T00:00:00Z"
         e = f"{year + (1 if month==12 else 0)}-{(month%12)+1:02d}-01T00:00:00Z"
-        
-        events_data = []
-        holiday_data = []
-        
-        for _ in range(2):
+
+        events_data = None
+        holiday_data = None
+
+        for attempt in range(2):
             try:
-                events_data = self.service.events().list(calendarId='primary', timeMin=s, timeMax=e, singleEvents=True, orderBy='startTime').execute().get('items', [])
-                break 
-            except: pass 
-                
-        for _ in range(2):
-            try:
-                holiday_data = self.service.events().list(calendarId=self.holiday_calendar_id, timeMin=s, timeMax=e, singleEvents=True, orderBy='startTime').execute().get('items', [])
+                events_data = self.service.events().list(
+                    calendarId='primary', timeMin=s, timeMax=e,
+                    singleEvents=True, orderBy='startTime'
+                ).execute().get('items', [])
                 break
-            except: pass 
+            except Exception:
+                if attempt == 0:
+                    # 첫 실패 시 조용한 토큰 갱신 후 재시도 (브라우저 절대 열지 않음)
+                    self._silent_refresh()
+
+        for attempt in range(2):
+            try:
+                holiday_data = self.service.events().list(
+                    calendarId=self.holiday_calendar_id, timeMin=s, timeMax=e,
+                    singleEvents=True, orderBy='startTime'
+                ).execute().get('items', [])
+                break
+            except Exception:
+                if attempt == 0:
+                    self._silent_refresh()
 
         return events_data, holiday_data
 
